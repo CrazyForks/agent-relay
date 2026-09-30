@@ -79,6 +79,8 @@ Gateway and its app-server are one failure domain. Normal shutdown terminates bo
 
 `gateway start` requires a successful prior setup. `gateway remove` switches to local mode and stops Gateway before changing the client environment. If Gateway cannot stop, removal aborts and preserves the launcher and installation state so the user can retry safely.
 
+Gateway accepts originless native clients on loopback only. Browser `Origin` headers and unrelated `Host` headers are rejected on WebSocket, health, and client-list routes. Codex 0.159.2 independently rejects browser Origins on its backend port. Local processes remain inside the trusted-machine boundary; do not expose either port. Pending approvals/questions stay native-owned: a frontend disconnect or elapsed five minutes does not resolve them or discard a later valid answer.
+
 ## Threads, workspaces, and multiple clients
 
 - Multiple CLI, Desktop, and Relay clients can connect to one Gateway. Each has an independent WebSocket connection; one app-server remains authoritative.

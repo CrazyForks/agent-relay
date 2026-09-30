@@ -3,7 +3,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { dirname, resolve } from "node:path";
 import { createConnection } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
-import type { ServerWebSocket } from "bun";
+import type { Server, ServerWebSocket } from "bun";
 import { loadDotEnvFile, parseBooleanEnv, parsePositiveIntegerEnv } from "../runtime/env.ts";
 import { codexAppServerWebSocketSpawnCommand } from "../providers/agents/codex/spawn.ts";
 import { GatewayLiveEventSequencer, messageThreadId, type GatewayLiveEvent } from "./live-events.ts";
@@ -11,6 +11,7 @@ import { gatewayLogPath, isProcessAlive, readGatewayState, resolveGatewayStatePa
 import { defaultGatewayStatePath } from "./control.ts";
 import { GatewayRelayControl } from "./relay-control.ts";
 import { GatewayObserver } from "./observer.ts";
+import { isAllowedGatewayRequest } from "./request-boundary.ts";
 import { isValidServerRequestResponse } from "./server-request-response.ts";
 
 interface GatewayRuntimeConfig {
@@ -61,7 +62,6 @@ export interface PendingServerRequest {
   resolvedNotified: boolean;
   conflicted?: boolean;
   response?: Record<string, unknown>;
-  timeoutTimer?: Timer;
   cleanupTimer?: Timer;
   participants: Map<string, string | number>;
   participantInstances: Map<string, string>;
@@ -180,7 +180,10 @@ async function main(): Promise<void> {
   await waitForPort(config.port + 1, 15_000);
   observer = new GatewayObserver(
     backendUrl,
-    (message) => relayControl.handleObserver(message),
+    (message) => {
+      relayControl.handleObserver(message);
+      handleServerRequestResolved({ id: "gateway-observer" }, message, clients, pendingRequests, relayedRequestIds);
+    },
     (error) => log(config.logPath, "gateway observer error", { error: error.message }),
     (threadId, value) => relayControl.handleObserverSnapshot(threadId, value),
   );
@@ -227,7 +230,7 @@ async function main(): Promise<void> {
         return;
       }
       if (handleServerRequestResolved(client.data, message, clients, pendingRequests, relayedRequestIds)) return;
-      if (isServerRequest(message) && isShareableServerRequest(message.method)) {
+      if (isServerRequest(message) && isShareableServerRequest(message.method, message.params)) {
         const shared = shareServerRequest(client, message, backend, clients, pendingRequests, relayedRequestIds);
         if (shared.conflict) {
           log(config.logPath, "gateway conflicting duplicate server request suppressed", {
@@ -262,30 +265,7 @@ async function main(): Promise<void> {
   frontendServer = Bun.serve<GatewayClientData>({
     hostname: "127.0.0.1",
     port: config.port,
-    fetch(request, server) {
-      const url = new URL(request.url);
-      if (url.pathname === "/readyz" || url.pathname === "/healthz") return Response.json({ ok: true, experimental: true });
-      if (url.pathname === "/v1/clients") {
-        return Response.json({
-          clients: [...clients.values()].map(({ data }) => ({
-            id: data.id,
-            name: data.name,
-            connectedAt: data.connectedAt,
-            threads: [...data.threads],
-          })),
-        });
-      }
-      const data: GatewayClientData = {
-        id: randomUUID(),
-        connectedAt: Date.now(),
-        queued: [],
-        threads: new Set(),
-        deliveredSeq: new Map(),
-        pendingThreadRequests: new Map(),
-      };
-      if (server.upgrade(request, { data })) return undefined;
-      return new Response("not found", { status: 404 });
-    },
+    fetch: (request, server) => handleGatewayRequest(request, server, config.port, clients),
     websocket: {
       open(socket) {
         const client = { data: socket.data, socket };
@@ -308,15 +288,8 @@ async function main(): Promise<void> {
           socket.data.backend?.close();
           relayControl.clientBackendClosed(socket.data.id);
         }
-        for (const pending of pendingRequests.values()) {
-          for (const [originKey, origin] of pending.origins) {
-            if (origin.clientId === socket.data.id) pending.origins.delete(originKey);
-          }
-          if (pending.origins.size > 0 || pending.resolved) continue;
-          pending.resolved = true;
-          notifyServerRequestResolved(pending, clients);
-          removePendingRequest(pending.key, pendingRequests, relayedRequestIds);
-        }
+        // A frontend disconnect is not a native callback resolution. Keep its
+        // identity until Codex resolves it or replays it to another connection.
         log(config.logPath, "gateway client disconnected", { clientId: socket.data.id });
       },
     },
@@ -334,6 +307,37 @@ async function main(): Promise<void> {
   writeJsonAtomic(config.statePath, state);
   log(config.logPath, "experimental relay Gateway ready", state);
   await new Promise<void>(() => undefined);
+}
+
+export function handleGatewayRequest(
+  request: Request,
+  server: Pick<Server<GatewayClientData>, "upgrade">,
+  port: number,
+  clients: Map<string, ConnectedClient>,
+): Response | undefined {
+  if (!isAllowedGatewayRequest(request, port)) return new Response("forbidden", { status: 403 });
+  const url = new URL(request.url);
+  if (url.pathname === "/readyz" || url.pathname === "/healthz") return Response.json({ ok: true, experimental: true });
+  if (url.pathname === "/v1/clients") {
+    return Response.json({
+      clients: [...clients.values()].map(({ data }) => ({
+        id: data.id,
+        name: data.name,
+        connectedAt: data.connectedAt,
+        threads: [...data.threads],
+      })),
+    });
+  }
+  const data: GatewayClientData = {
+    id: randomUUID(),
+    connectedAt: Date.now(),
+    queued: [],
+    threads: new Set(),
+    deliveredSeq: new Map(),
+    pendingThreadRequests: new Map(),
+  };
+  if (server.upgrade(request, { data })) return undefined;
+  return new Response("not found", { status: 404 });
 }
 
 export function deliverLiveEvent(
@@ -462,14 +466,8 @@ export function shareServerRequest(
     participantInstances: new Map(origin.data.relayInstanceId ? [[origin.data.id, origin.data.relayInstanceId]] : []),
   };
   pendingRequests.set(key, pending);
-  pending.timeoutTimer = setTimeout(() => {
-    const active = pendingRequests.get(key);
-    if (!active || active.resolved) return;
-    active.resolved = true;
-    notifyServerRequestResolved(active, clients);
-    schedulePendingRequestRemoval(active, pendingRequests, relayedRequestIds);
-  }, 5 * 60_000);
-  pending.timeoutTimer.unref();
+  // Pending callbacks live as long as the native request, even beyond five
+  // minutes. Only settled answers have a bounded in-memory retention timer.
   shareServerRequestWithMissingPeers(pending, message, origin.data.id, clients, relayedRequestIds);
   return { kind: "created", deliverToOrigin: true, conflict: false };
 }
@@ -636,7 +634,6 @@ function removePendingRequest(
 ): void {
   const pending = pendingRequests.get(key);
   if (!pending) return;
-  if (pending.timeoutTimer) clearTimeout(pending.timeoutTimer);
   if (pending.cleanupTimer) clearTimeout(pending.cleanupTimer);
   pendingRequests.delete(key);
   for (const requestId of pending.participants.values()) {

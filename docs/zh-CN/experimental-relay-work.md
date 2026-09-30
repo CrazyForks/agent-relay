@@ -79,6 +79,8 @@ Gateway 与其 app-server 属于同一故障域：正常停止会终止二者；
 
 `gateway start` 必须在成功 setup 后运行。`gateway remove` 会先切换 local 并停止 Gateway，再修改客户端环境；如果停止失败，remove 会中止并保留启动器与安装状态，方便安全重试。
 
+Gateway 仅接受 loopback 上不带 Origin 的原生客户端连接。WebSocket、健康检查和客户端列表入口均拒绝浏览器 Origin 或无关 Host；Codex 0.159.2 的后端端口也独立拒绝浏览器 Origin。本机进程仍处于可信机器边界内，请勿对外暴露任一端口。待决审批和问题由原生 Codex 决定结束；客户端断开或超过五分钟不会使其自动完成，也不会丢弃稍后的有效回答。
+
 ## Thread、workspace 与多客户端
 
 - 多个 CLI、桌面版和 Relay 客户端可连接同一个 Gateway。每个客户端有独立 WebSocket 连接，但只由一个 app-server 管理权威状态。

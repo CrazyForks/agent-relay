@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   deliverLiveEvent,
   handleServerRequestResolved,
@@ -403,7 +403,35 @@ describe("Codex 0.159.2 Gateway callback identity", () => {
 });
 
 describe("Gateway native callback lifetime", () => {
-
+  test.each([
+    ["item/commandExecution/requestApproval", { decision: "accept" }],
+    ["item/tool/requestUserInput", { answers: { question: { answers: ["answer"] } } }],
+    ["mcpServer/elicitation/request", { action: "accept", content: {}, _meta: null }],
+  ])("keeps %s answerable after the old five-minute deadline and reconnect", (method, result) => {
+    const f = callbackFixture();
+    const timers = spyOn(globalThis, "setTimeout");
+    try {
+      f.share({ id: 1, method: method as string, params: { threadId: "thread-1", turnId: "turn-1", itemId: "item" } });
+      for (const [callback, delay] of [...timers.mock.calls]) {
+        if (typeof callback === "function" && typeof delay === "number" && delay <= 5 * 60_000) callback();
+      }
+      expect([...f.pending.values()][0]!.resolved).toBe(false);
+      expect(f.peer.sent.filter((message) => message.method === "serverRequest/resolved")).toEqual([]);
+      expect(f.origin.replies).toEqual([]);
+      const alias = f.peer.sent[0]!.id as string;
+      f.clients.delete(f.peer.client.data.id);
+      f.peer.client.data.id = "relay-reconnected";
+      f.clients.set(f.peer.client.data.id, f.peer.client);
+      rebindPendingRequestParticipant(f.peer.client, f.pending);
+      f.answer(alias, result);
+      expect(f.origin.replies).toEqual([{ id: 1, result }]);
+      f.answer(1, { decision: "decline" }, f.origin);
+      expect(f.origin.replies).toHaveLength(1);
+      expect([...f.pending.values()][0]!.cleanupTimer).toBeDefined();
+    } finally {
+      timers.mockRestore();
+    }
+  });
 
   test("keeps unanswered controls when no backend can accept a reply, then routes a native replay", () => {
     const f = callbackFixture();

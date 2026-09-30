@@ -15,6 +15,7 @@ Report privately through GitHub Security Advisories when available. If advisorie
 - The relay is intended to run on a trusted machine.
 - IM access is restricted with `ALLOWED_USER_IDS`; `ALLOWED_CONVERSATION_IDS` is recommended for group or shared bot deployments.
 - The optional relay control API binds to `127.0.0.1` and uses a startup-scoped bearer token passed only through the child agent environment.
+- The experimental shared Gateway binds loopback and accepts originless native CLI/Desktop/Relay clients only. It rejects every supplied browser `Origin` and non-loopback `Host`, including health and client-enumeration routes. The Codex 0.159.2 backend independently rejects browser Origins. This is not authentication against other processes on the trusted machine; do not expose either port through a reverse proxy or tunnel.
 - Runtime logs at `debug` level can include raw IM messages, prompts, and agent output chunks.
 - SQLite state can contain workspace names, bindings, thread IDs, transcript events, prompt state, approvals, and paged output.
 
