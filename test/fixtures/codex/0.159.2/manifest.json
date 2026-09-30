@@ -1,0 +1,18 @@
+{
+  "version": "0.159.2",
+  "tag": "rust-v0.159.2",
+  "commit": "ff6aec96948b70d94983af2641a6b67c94faeff5",
+  "source": "https://github.com/openai/codex/tree/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/app-server-protocol",
+  "generator": "codex app-server generate-ts --out <directory> --experimental",
+  "sha256": {
+    "v2/CommandExecutionRequestApprovalParams.ts": "531eaecb38d8c93ed389ada2482f6e2d7d6fa5351adf423706bf6e6eeddf60dc",
+    "v2/CommandExecutionApprovalKind.ts": "16f398d31bf73bf7ca9e8694701fd9d2f5d745f6cde8032b81d4c1bfb43d12b6",
+    "v2/ToolRequestUserInputParams.ts": "0e3063b70a99b815e170b3c157416924315308a1c8af201dcc2f3fb459e4144a",
+    "v2/ThreadSettings.ts": "4054b14454291170dd57bbac29c8c8ed4e63657b9b4cd1b8e7100705531814ac",
+    "v2/Thread.ts": "1f9dc096a3c6735956ce38cbb7527e35b13e9ed663254ee13dba7414eab6d28c",
+    "v2/ThreadResumeParams.ts": "6ea6561448792277f9b52ac9d920d71ef8c9be6e43621ee6329fb948329e8ff7",
+    "v2/ThreadResumeResponse.ts": "080196e4c158212de187a0d3331de28bf8a62df17d90663cf5d1fc2665dd8177",
+    "v2/ThreadForkResponse.ts": "1d4e0bdfe2beef2906fa58099764cf0a4c0820525998da8d3e02c94831caef25",
+    "Settings.ts": "75a444fb4aa9ce8c906871e5eedeaa04f4da1943fe89906725be16f582044066"
+  }
+}

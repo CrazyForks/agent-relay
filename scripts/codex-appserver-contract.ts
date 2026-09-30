@@ -1,13 +1,24 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import packageJson from "../package.json" with { type: "json" };
 import { codexSpawnCommand, isCodexVersionSupported, MINIMUM_CODEX_VERSION, parseCodexVersion } from "../src/providers/agents/codex/spawn.ts";
 
+import { assertCodexUpgradeProtocol, requiresCodexUpgradeContract } from "./codex-upgrade-contract.ts";
+
+const verifyThreads = process.argv.includes("--threads");
 const codexBin = process.env.CODEX_BIN?.trim() || "codex";
 const workDir = mkdtempSync(join(tmpdir(), "agent-relay-codex-contract-"));
+
+// Never load the operator's credentials, threads, or repository-scoped configuration.
+const codexHome = join(workDir, "home");
+const runtimeDir = join(workDir, "runtime");
+const codexEnv: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome, XDG_RUNTIME_DIR: runtimeDir };
+for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"]) delete codexEnv[key];
+mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
 
 async function main(): Promise<void> {
   try {
@@ -17,9 +28,15 @@ async function main(): Promise<void> {
       throw new Error(`Contract requires codex-cli ${MINIMUM_CODEX_VERSION} or newer; received ${JSON.stringify(versionOutput.trim())}.`);
     }
 
+    const expectedVersion = process.env.CODEX_CONTRACT_EXPECT_VERSION?.trim();
+    if (expectedVersion && version !== expectedVersion) throw new Error(`Expected codex-cli ${expectedVersion}; received ${version}.`);
+
     const schemaDir = join(workDir, "schema");
     await runCodex(["app-server", "generate-ts", "--out", schemaDir, "--experimental"], 60_000);
     assertGeneratedProtocol(schemaDir);
+    if (requiresCodexUpgradeContract(version)) {
+      assertCodexUpgradeProtocol((path) => readFileSync(join(schemaDir, path), "utf8"));
+    }
 
     const rpc = new ContractRpc(codexBin);
     try {
@@ -41,12 +58,39 @@ async function main(): Promise<void> {
       const modeNames = collaborationModes.data.map((value) => asRecord(value)?.mode).filter((mode): mode is string => typeof mode === "string");
       if (!modeNames.includes("default") || !modeNames.includes("plan")) throw new Error("collaborationMode/list did not advertise default and plan modes.");
 
-      process.stdout.write(`codex app-server contract passed (${version}; ${models.data.length} models; ${collaborationModes.data.length} collaboration modes)\n`);
+      if (verifyThreads && requiresCodexUpgradeContract(version)) await assertIsolatedThreadSettings(rpc);
+
+      process.stdout.write(`codex app-server contract passed (${version}; ${models.data.length} models; ${collaborationModes.data.length} collaboration modes${verifyThreads && requiresCodexUpgradeContract(version) ? "; isolated settings/resume verified" : ""})\n`);
     } finally {
       await rpc.close();
     }
   } finally {
     rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+/** Empty ephemeral thread only: no turn/start, model call, user thread, or credentials. */
+async function assertIsolatedThreadSettings(rpc: ContractRpc): Promise<void> {
+  const started = asRecord(await rpc.request("thread/start", { cwd: workDir, ephemeral: true }));
+  const threadId = asRecord(started?.thread)?.id;
+  const model = started?.model;
+  if (typeof threadId !== "string" || typeof model !== "string") throw new Error("Isolated thread/start did not return its native thread and model.");
+  try {
+    for (const effort of ["high", null]) {
+      const updated = asRecord(await rpc.request("thread/settings/update", {
+        threadId,
+        collaborationMode: { mode: "plan", settings: { model, reasoning_effort: effort, developer_instructions: null } },
+      }));
+      const settings = asRecord(updated?.threadSettings);
+      if (settings?.model !== model || settings?.effort !== effort) throw new Error("thread/settings/update did not preserve model and nullable effort.");
+    }
+    const resumed = asRecord(await rpc.request("thread/resume", {
+      threadId, excludeTurns: true, initialTurnsPage: { limit: 1, sortDirection: "desc", itemsView: "full" },
+    }));
+    if (!Array.isArray(asRecord(resumed?.initialTurnsPage)?.data)) throw new Error("Experimental initialTurnsPage was not returned for the isolated thread.");
+    if (resumed?.model !== model || resumed?.reasoningEffort !== null) throw new Error("thread/resume changed the isolated thread's native model or cleared effort.");
+  } finally {
+    await rpc.request("thread/unsubscribe", { threadId });
   }
 }
 
@@ -158,7 +202,8 @@ async function runCodex(args: string[], timeoutMs = 30_000): Promise<string> {
   const command = codexSpawnCommand(codexBin, args);
   return await new Promise<string>((resolve, reject) => {
     const child = spawn(command.command, command.args, {
-      env: process.env,
+      env: codexEnv,
+      cwd: workDir,
       windowsHide: true,
       windowsVerbatimArguments: command.windowsVerbatimArguments,
       stdio: ["ignore", "pipe", "pipe"],
@@ -192,7 +237,8 @@ class ContractRpc {
   constructor(bin: string) {
     const command = codexSpawnCommand(bin, ["app-server", "--listen", "stdio://"]);
     this.proc = spawn(command.command, command.args, {
-      env: process.env,
+      env: codexEnv,
+      cwd: workDir,
       windowsHide: true,
       windowsVerbatimArguments: command.windowsVerbatimArguments,
       stdio: ["pipe", "pipe", "pipe"],

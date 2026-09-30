@@ -34,7 +34,8 @@
     "gateway": "bun src/gateway/manage.ts",
     "codex:gateway": "bun src/gateway/codex-launcher.ts",
     "typecheck": "tsc --noEmit",
-    "check": "bun run typecheck && bun test"
+    "check": "bun run typecheck && bun test",
+    "test:codex-gateway-boundary": "bun scripts/codex-gateway-boundary-contract.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

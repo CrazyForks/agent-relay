@@ -40,6 +40,39 @@ Review:
 - `SECURITY.md` reflects the current security model.
 - No local runtime files are staged.
 
+## Codex compatibility gates
+
+Keep three distinct checks: the 0.145.0 compatibility floor, fixed 0.159.2
+release gate, and scheduled latest-release drift detection. The pinned job
+asserts the actual binary version; it does not update the user's Codex install.
+
+```bash
+CODEX_CONTRACT_EXPECT_VERSION=0.159.2 bun run test:codex-contract
+CODEX_CONTRACT_EXPECT_VERSION=0.159.2 bun run test:codex-gateway-boundary
+# Optional deeper native test in an environment supporting Codex's sandbox:
+CODEX_CONTRACT_EXPECT_VERSION=0.159.2 bun run test:codex-contract --threads
+```
+
+The contract creates a temporary Codex home and working directory, generates the
+experimental schema, and checks initialize/model/collaboration-mode discovery.
+`--threads` additionally creates only an empty ephemeral thread to check
+high-to-null effort, Plan settings, and `initialTurnsPage` resume. It never starts
+a model turn or loads existing user threads. A sandbox/environment failure in
+this optional check is an unverified native-thread integration, not a pass.
+
+Before claiming end-to-end release support, also verify authorized test accounts
+with native CLI/Desktop, Telegram, Lark, BTW, and disconnect/reconnect. Cover:
+
+- Different approval IDs on one item, command versus terminal input, conflicting
+  duplicate payloads, malformed/unsupported decisions, and stale clicks
+- Nonblocking questions while output/Steer continues; simultaneous real blockers
+- Explicit nullable effort and external native model changes before Plan
+- Pending Gateway requests beyond five minutes and after frontend reconnect
+- Originless native connections and rejected browser Origins on both local ports
+
+Do not infer those live results from unit tests or publish credentials, prompts,
+thread IDs, or machine paths with test logs.
+
 ## Create a local tag
 
 ```bash

@@ -6,6 +6,16 @@ The project is pre-1.0 and currently installs from source.
 
 ## Unreleased
 
+### Fixed
+
+- Keep Codex approval callbacks distinct by native callback ID/action, reject ambiguous or conflicting security payloads, and honor the exact advertised decisions.
+- Preserve nonblocking question behavior, concurrent blocking requests, and explicit nullable native reasoning settings when selecting Plan/Default.
+- Keep pending Gateway requests alive until native resolution and reject browser-origin/non-loopback-host access to the local Gateway.
+
+### Added
+
+- Pinned Codex 0.159.2 experimental schema fixtures and CI contract alongside the 0.145.0 floor and scheduled latest check.
+
 ### Changed
 
 - Split user-facing README and docs into separate English and Chinese versions.
