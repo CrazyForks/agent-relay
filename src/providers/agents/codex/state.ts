@@ -5,6 +5,8 @@ export interface RunningSession {
   status: AgentSessionStatus;
   backgroundTerminals: BackgroundTerminalTracker;
   reviewTurnId?: string;
+  /** Guards settings snapshots against newer notifications received during an RPC. */
+  settingsRevision?: number;
 }
 
 export interface PendingGlobalNotice {

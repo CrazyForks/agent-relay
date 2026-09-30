@@ -1060,6 +1060,16 @@ const nativeApproval = {
   params: { command: "bun test", availableDecisions: ["accept", "decline"] },
 };
 
+const asyncQuestion = {
+  type: "user_input_request" as const,
+  sessionKey: "codex:1:demo",
+  threadId: "thread-1",
+  turnId: "turn-1",
+  itemId: "async-question",
+  requestId: "async-question",
+  isBlocking: false,
+  questions: [{ id: "style", header: "Style", question: "Which style?", options: [{ label: "Brief", description: "" }] }],
+};
 
 describe("Codex 0.159 callback and async question semantics", () => {
   test("independent native callbacks on one item keep their own cards and answers", async () => {
@@ -1150,26 +1160,166 @@ describe("Codex 0.159 callback and async question semantics", () => {
     expect(adapter.answered.at(-1)?.text).toContain("not offered by Codex");
   });
 
+  test("nonblocking questions stay answerable while ordinary messages steer the active turn", async () => {
+    const { router, store, adapter, agent } = await activePromptFixture();
+    await router.handleAgentOutput(asyncQuestion);
+    const questionCard = adapter.sent.at(-1)!;
+    expect(questionCard.text).toContain("Which style?");
+    expect(store.getTask(1)?.status).toBe("running");
+    expect(adapter.reactions.some((reaction) => reaction.emoji === "🤔")).toBe(false);
+    await router.handle(textMessage("continue with the implementation"));
+    expect(agent.sent.map((message) => message.text)).toEqual(["keep working", "continue with the implementation"]);
+    expect(agent.responses).toEqual([]);
+    expect(store.getPendingPrompt("1", questionCard.messageId!)).toBeDefined();
+    await router.handle(callbackMessage(questionCard.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data, 7, "async-answer", questionCard.messageId));
+    expect(agent.responses).toEqual([{ key: asyncQuestion.sessionKey, requestId: asyncQuestion.requestId, result: { answers: { style: { answers: ["Brief"] } } } }]);
+    expect(store.getTask(1)?.status).toBe("running");
+    expect(agent.getStatus(asyncQuestion.sessionKey)?.activeTurnId).toBe("turn-1");
+  });
 
+  test("resolving a nonblocking question does not release a concurrent approval or blocking question", async () => {
+    const { router, store, adapter, agent } = await activePromptFixture();
+    const blockingQuestion = { ...asyncQuestion, requestId: "blocking-question", itemId: "blocking-question", isBlocking: true };
+    await router.handleAgentOutput(blockingQuestion);
+    const blockingCard = adapter.sent.at(-1)!;
+    await router.handleAgentOutput(nativeApproval);
+    const approvalCard = adapter.sent.at(-1)!;
+    await router.handleAgentOutput(asyncQuestion);
+    const asyncCard = adapter.sent.at(-1)!;
+    await router.handle(textMessage("must still wait"));
+    expect(agent.sent).toHaveLength(1);
+    expect(adapter.sent.at(-1)?.text).toContain("waiting for approval");
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: asyncQuestion.sessionKey, requestId: asyncQuestion.requestId, result: { answers: { style: { answers: ["Brief"] } } } });
+    expect(store.getPendingPrompt("1", asyncCard.messageId!)).toBeUndefined();
+    expect(store.getTask(1)?.status).toBe("blocked");
+    await router.handle(callbackMessage(approvalCard.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data, 7, "approval-answer", approvalCard.messageId));
+    expect(store.getTask(1)?.status).toBe("blocked");
+    expect(store.getPendingPrompt("1", blockingCard.messageId!)).toBeDefined();
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: asyncQuestion.sessionKey, requestId: "blocking-question", result: { answers: { style: { answers: ["Brief"] } } } });
+    expect(store.getTask(1)?.status).toBe("running");
+  });
 
+  test("answering a nonblocking question locally preserves a concurrent blocking request", async () => {
+    const { router, store, adapter } = await activePromptFixture();
+    await router.handleAgentOutput(nativeApproval);
+    const approvalCard = adapter.sent.at(-1)!;
+    await router.handleAgentOutput({ ...asyncQuestion, questions: [{ id: "style", header: "Style", question: "Which style?" }] });
+    const questionCard = adapter.sent.at(-1)!;
+    await router.handle(textMessage("brief", 7, Number(questionCard.messageId)));
+    expect(store.getTask(1)?.status).toBe("blocked");
+    expect(store.getPendingPrompt("1", approvalCard.messageId!)).toBeDefined();
+  });
 
+  test("native resolution of a nonblocking question preserves a stalled activity phase", async () => {
+    const { router, adapter } = await activePromptFixture();
+    await router.handleAgentOutput({ type: "activity", sessionKey: asyncQuestion.sessionKey, threadId: "thread-1", turnId: "turn-1", activity: { kind: "reasoning", summary: "Working through the plan" } });
+    await waitForStreamFlush();
+    const activityCard = adapter.sent.find((message) => message.text.includes("Working"))!;
+    await router.handleAgentOutput(asyncQuestion);
+    await router.handleAgentOutput({ type: "turn_stalled", sessionKey: asyncQuestion.sessionKey, threadId: "thread-1", turnId: "turn-1", detail: "Waiting for upstream progress" });
+    const editsBeforeResolution = adapter.edited.filter((message) => message.options.messageId === activityCard.messageId).length;
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: asyncQuestion.sessionKey, requestId: asyncQuestion.requestId });
+    expect(adapter.edited.filter((message) => message.options.messageId === activityCard.messageId)).toHaveLength(editsBeforeResolution);
+  });
 
+  test("turn completion expires unanswered async cards without reopening completed work", async () => {
+    const { router, store, adapter, agent } = await activePromptFixture();
+    await router.handleAgentOutput(asyncQuestion);
+    const card = adapter.sent.at(-1)!;
+    await router.handleAgentOutput({ type: "turn_completed", sessionKey: asyncQuestion.sessionKey, turnId: "turn-1", status: "completed" });
+    expect(store.getPendingPrompt("1", card.messageId!)).toBeUndefined();
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: asyncQuestion.sessionKey, requestId: asyncQuestion.requestId, turnId: "turn-1" });
+    await router.handle(callbackMessage(card.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data, 7, "completed-question", card.messageId));
+    expect(agent.responses).toEqual([]);
+    expect(store.getTask(1)?.status).toBe("done");
+  });
 
+  test("BTW async questions allow child steering and never change parent gates", async () => {
+    const { router, store, adapter, agent } = await activePromptFixture();
+    agent.sideConversationWait = new Promise<void>(() => undefined);
+    await router.handleAgentOutput(nativeApproval);
+    await router.handle(textMessage("/btw inspect the helper"));
+    const opened = agent.sideConversationOpens[0]!;
+    await agent.emitSideConversationEvent(opened.threadId, { ...asyncQuestion, turnId: "side-turn-1" });
+    await waitForStreamFlush();
+    const questionCard = adapter.sent.at(-1)!;
+    await router.handle(textMessage("check the next helper too"));
+    expect(agent.sideConversationSends.at(-1)).toMatchObject({ text: "check the next helper too", steered: true });
+    expect(agent.sent).toHaveLength(1);
+    expect(store.getTask(1)?.status).toBe("blocked");
+    await router.handle(callbackMessage(questionCard.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data, 7, "side-async-answer", questionCard.messageId));
+    expect(agent.responses.at(-1)?.key).toBe(opened.eventSessionKey);
+    expect(store.getTask(1)?.status).toBe("blocked");
+    expect(store.latestTranscriptEvent("1", "demo", "user")?.text.trim()).toBe("keep working");
+  });
 
+  test("progress notifications cannot clear an unresolved approval phase", async () => {
+    const { router, adapter, store } = await activePromptFixture();
+    await router.handleAgentOutput({ type: "activity", sessionKey: asyncQuestion.sessionKey, threadId: "thread-1", turnId: "turn-1", activity: { kind: "reasoning", summary: "Inspecting files" } });
+    await waitForStreamFlush();
+    const activityCard = adapter.sent.find((message) => message.text.includes("Working"))!;
+    await router.handleAgentOutput(nativeApproval);
+    await router.handleAgentOutput(asyncQuestion);
+    await router.handleAgentOutput({ type: "turn_progressed", sessionKey: asyncQuestion.sessionKey, threadId: "thread-1", turnId: "turn-1" });
+    expect(store.getTask(1)?.status).toBe("blocked");
+    expect(adapter.edited.filter((message) => message.options.messageId === activityCard.messageId).at(-1)?.text).toContain("Waiting for approval");
+  });
 
+  test("a stale resolution from another thread cannot retire the current callback", async () => {
+    const { router, store, adapter } = await activePromptFixture();
+    await router.handleAgentOutput(nativeApproval);
+    const card = adapter.sent.at(-1)!;
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: nativeApproval.sessionKey, requestId: nativeApproval.requestId, threadId: "previous-thread", turnId: "previous-turn" });
+    expect(store.getPendingPrompt("1", card.messageId!)).toBeDefined();
+    expect(store.getTask(1)?.status).toBe("blocked");
+  });
 
+  test("an expired async question does not instruct the user to interrupt ongoing work", async () => {
+    const { router, adapter, store, agent } = await activePromptFixture();
+    await router.handleAgentOutput(asyncQuestion);
+    const card = adapter.sent.at(-1)!;
+    const pending = store.getPendingPrompt("1", card.messageId!)!;
+    store.setPendingPrompt({ ...pending, expiresAt: 1 });
+    await router.handle(callbackMessage(card.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data, 7, "expired-async", card.messageId));
+    expect(agent.responses).toEqual([]);
+    expect(store.getTask(1)?.status).toBe("running");
+    expect(adapter.edited.at(-1)?.text).toContain("Codex can continue without this answer");
+    expect(adapter.edited.at(-1)?.text).not.toContain("Interrupt");
+  });
 
+  test("an MCP answer cannot release a concurrent approval", async () => {
+    const { router, adapter, store } = await activePromptFixture();
+    await router.handleAgentOutput(nativeApproval);
+    await router.handleAgentOutput({ type: "mcp_elicitation_request", sessionKey: nativeApproval.sessionKey, requestId: "mcp-concurrent", serverName: "example", mode: "url", message: "Complete the action", url: "https://example.test/action" });
+    const card = adapter.sent.at(-1)!;
+    const complete = card.options!.replyMarkup!.inline_keyboard.flat().find((button) => button.text === "Complete")!;
+    await router.handle(callbackMessage(complete.callback_data, 7, "mcp-concurrent-answer", card.messageId));
+    expect(store.getTask(1)?.status).toBe("blocked");
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: nativeApproval.sessionKey, requestId: nativeApproval.requestId, result: { decision: "decline" } });
+    expect(store.getTask(1)?.status).toBe("running");
+  });
 
-
-
-
-
-
-
-
-
-
-
-
+  test("BTW duplicate callback resolution releases only its own logical gate", async () => {
+    const { router, adapter, agent, store } = await activePromptFixture();
+    agent.sideConversationWait = new Promise<void>(() => undefined);
+    await router.handle(textMessage("/btw inspect the helper"));
+    const opened = agent.sideConversationOpens[0]!;
+    const first = { ...nativeApproval, threadId: opened.threadId, turnId: "side-turn-1" };
+    await agent.emitSideConversationEvent(opened.threadId, first);
+    await agent.emitSideConversationEvent(opened.threadId, { ...first, requestId: "side-alias" });
+    await agent.emitSideConversationEvent(opened.threadId, { ...first, requestId: "side-other", approvalId: "other-approval" });
+    await waitForStreamFlush();
+    await agent.emitSideConversationEvent(opened.threadId, { type: "server_request_resolved", requestId: "side-alias" });
+    await waitForStreamFlush();
+    await router.handle(textMessage("not yet"));
+    expect(agent.sideConversationSends).toHaveLength(1);
+    expect(adapter.sent.at(-1)?.text).toContain("BTW is waiting");
+    await agent.emitSideConversationEvent(opened.threadId, { type: "server_request_resolved", requestId: "side-other" });
+    await waitForStreamFlush();
+    await router.handle(textMessage("continue the child"));
+    expect(agent.sideConversationSends.at(-1)).toMatchObject({ text: "continue the child", steered: true });
+    expect(store.getTask(1)?.status).toBe("running");
+    expect(agent.sent).toHaveLength(1);
+  });
 
 });

@@ -73,6 +73,7 @@ describe("CodexDriver request ordering", () => {
 
     expect(events.at(-1)).toEqual({
       type: "user_input_request",
+      isBlocking: true,
       sessionKey: "codex:1:demo",
       requestId: 900,
       threadId: "thread-1",

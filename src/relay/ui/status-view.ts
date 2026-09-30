@@ -12,7 +12,7 @@ export interface StatusView {
   threadStatus?: string;
   model?: string;
   modelProvider?: string;
-  reasoningEffort?: string;
+  reasoningEffort?: string | null;
   approvalPolicy?: string;
   approvalsReviewer?: string;
   sandboxPolicy?: string;

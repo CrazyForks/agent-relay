@@ -515,3 +515,38 @@ describe("experimental Relay Gateway control plane", () => {
     expect(emptyState.latestTurn).toBeUndefined();
   });
 });
+
+describe("Gateway nonblocking user-input projection", () => {
+  test("uses native active flags while concurrent blocking and nonblocking requests remain answerable", () => {
+    const native = client("native", "codex-cli", ["thread-1"]);
+    const relay = client("relay", "agent-relay", ["thread-1"]);
+    const control = new GatewayRelayControl(() => [native, relay]);
+    hello(control, relay);
+    const status = (activeFlags: string[]) => control.handleObserver({
+      method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "active", activeFlags } },
+    });
+    const snapshot = () => {
+      control.sendSnapshot(relay, "thread-1");
+      return (notifications(relay, RELAY_CONTROL_SNAPSHOT_METHOD).at(-1)?.params as Record<string, unknown>).threadState;
+    };
+    const request = (id: number, isBlocking: boolean) => control.handleBackend(native, {
+      id, method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-1", itemId: `input-${id}`, isBlocking, questions: [] },
+    });
+    status([]);
+    request(1, false);
+    expect(snapshot()).toMatchObject({ threadStatus: "active", waitingOn: null });
+    status(["waitingOnUserInput"]);
+    request(2, true);
+    request(3, false);
+    expect(snapshot()).toMatchObject({ threadStatus: "active", waitingOn: "userInput" });
+    // Resolving a nonblocking callback must not clear another native wait.
+    control.handleBackend(native, { method: "serverRequest/resolved", params: { threadId: "thread-1", requestId: 1 } });
+    expect(snapshot()).toMatchObject({ threadStatus: "active", waitingOn: "userInput" });
+    // Native status is authoritative even while the nonblocking request remains.
+    status([]);
+    expect(snapshot()).toMatchObject({ threadStatus: "active", waitingOn: null });
+    status(["waitingOnApproval"]);
+    request(4, false);
+    expect(snapshot()).toMatchObject({ threadStatus: "active", waitingOn: "approval" });
+  });
+});

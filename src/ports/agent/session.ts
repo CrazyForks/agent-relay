@@ -41,7 +41,8 @@ export interface AgentSessionStatus {
   canAcceptDirectInput?: boolean;
   model?: string;
   modelProvider?: string;
-  reasoningEffort?: string;
+  /** Null is an explicitly unset native effort; undefined is unknown. */
+  reasoningEffort?: string | null;
   approvalPolicy?: string;
   approvalsReviewer?: string;
   sandboxPolicy?: string;

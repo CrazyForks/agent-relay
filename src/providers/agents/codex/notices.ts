@@ -21,7 +21,7 @@ export function globalNoticeFor(method: string, params: Record<string, unknown> 
   return undefined;
 }
 
-export function settingsSnapshot(status: AgentSessionStatus): Record<string, string | undefined> {
+export function settingsSnapshot(status: AgentSessionStatus): Record<string, string | null | undefined> {
   return {
     model: status.model,
     modelProvider: status.modelProvider,
@@ -32,7 +32,7 @@ export function settingsSnapshot(status: AgentSessionStatus): Record<string, str
   };
 }
 
-export function changedSettings(before: Record<string, string | undefined>, after: Record<string, string | undefined>): Record<string, string> {
+export function changedSettings(before: Record<string, string | null | undefined>, after: Record<string, string | null | undefined>): Record<string, string> {
   const changes: Record<string, string> = {};
   for (const [name, value] of Object.entries(after)) {
     if (before[name] !== value) changes[name] = value ?? "(default)";

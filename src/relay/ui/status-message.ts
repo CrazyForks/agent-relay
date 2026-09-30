@@ -96,7 +96,7 @@ export function formatDetailsMessage(status: StatusView): RenderedTelegramText {
     status.model ? code(status.model) : "unknown",
     status.modelProvider ? ` / ${status.modelProvider}` : "",
     "\nReasoning: ",
-    status.reasoningEffort ?? "unknown",
+    status.reasoningEffort === null ? "default" : status.reasoningEffort ?? "unknown",
     "\nUsage: ",
     formatTokenContextUsage(status),
     "\nApproval policy: ",

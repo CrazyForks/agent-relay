@@ -56,10 +56,11 @@ export async function handleCodexServerRequest(message: JsonRpcRequest, context:
   if (message.method === "item/tool/requestUserInput") {
     const questions = Array.isArray(params?.questions) ? params.questions.map(toQuestion).filter(Boolean) as AgentUserInputQuestion[] : [];
     const turnId = getTurnId(params);
-    if (!context.registerRequest(message.id, threadId!, keys, message.method, turnId, serverRequestSignature(message))) return;
+    const isBlocking = params?.isBlocking !== false;
+    if (!context.registerRequest(message.id, threadId!, keys, message.method, turnId, serverRequestSignature(message), isBlocking)) return;
     for (const sessionKey of keys) {
       const running = context.sessions.get(sessionKey);
-      if (running) running.status.waitingForUserInput = true;
+      if (running && isBlocking) running.status.waitingForUserInput = true;
     }
     for (const sessionKey of keys) {
       if (context.requestIsResolved(message.id, threadId!)) break;
@@ -71,6 +72,7 @@ export async function handleCodexServerRequest(message: JsonRpcRequest, context:
           requestId: message.id,
           threadId: threadId!,
           questions,
+          isBlocking,
           turnId,
           itemId: typeof params?.itemId === "string" ? params.itemId : undefined,
         });
@@ -219,7 +221,8 @@ async function handleSideConversationRequest(
 
   if (message.method === "item/tool/requestUserInput") {
     const questions = Array.isArray(params?.questions) ? params.questions.map(toQuestion).filter(Boolean) as AgentUserInputQuestion[] : [];
-    if (!context.registerRequest(message.id, threadId, [side.sessionKey], message.method, getTurnId(params), serverRequestSignature(message))) return;
+    const isBlocking = params?.isBlocking !== false;
+    if (!context.registerRequest(message.id, threadId, [side.sessionKey], message.method, getTurnId(params), serverRequestSignature(message), isBlocking)) return;
     if (!context.claimRequestDelivery(message.id, threadId, side.sessionKey)) return;
     try {
       await emit({
@@ -228,6 +231,7 @@ async function handleSideConversationRequest(
         requestId: message.id,
         threadId,
         questions,
+        isBlocking,
         ...(getTurnId(params) ? { turnId: getTurnId(params) } : {}),
         ...(typeof params?.itemId === "string" ? { itemId: params.itemId } : {}),
       });

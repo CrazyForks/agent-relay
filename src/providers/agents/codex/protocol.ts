@@ -35,7 +35,7 @@ export function applySessionMetadata(status: AgentSessionStatus, result: unknown
   applyThreadMetadata(status, asRecord(record?.thread));
   status.model = getString(record, "model") ?? status.model;
   status.modelProvider = getString(record, "modelProvider") ?? status.modelProvider;
-  status.reasoningEffort = getString(record, "reasoningEffort") ?? status.reasoningEffort;
+  if (record?.reasoningEffort === null || typeof record?.reasoningEffort === "string") status.reasoningEffort = record.reasoningEffort;
   status.approvalPolicy = summarizeUnknown(record?.approvalPolicy) ?? status.approvalPolicy;
   status.approvalsReviewer = getString(record, "approvalsReviewer") ?? status.approvalsReviewer;
   status.sandboxPolicy = summarizeUnknown(record?.sandbox) ?? status.sandboxPolicy;
@@ -48,6 +48,14 @@ export function applyThreadMetadata(status: AgentSessionStatus, thread: Record<s
   if (!thread) return;
   status.threadId = getString(thread, "id") ?? status.threadId;
   status.threadName = getString(thread, "name") ?? status.threadName;
+  // A null model is unavailable metadata, not an instruction to choose a new
+  // catalog default. Effort null is authoritative for a loaded/current model;
+  // sparse historical snapshots must not erase known effective runtime values.
+  status.model = getString(thread, "model") ?? status.model;
+  if (typeof thread.reasoningEffort === "string"
+    || (thread.reasoningEffort === null && (typeof thread.model === "string" || status.reasoningEffort === undefined))) {
+    status.reasoningEffort = thread.reasoningEffort;
+  }
   const threadStatus = asRecord(thread.status);
   status.threadStatus = getString(threadStatus, "type") ?? status.threadStatus;
   const activeFlags = Array.isArray(threadStatus?.activeFlags) ? threadStatus.activeFlags : [];
@@ -140,14 +148,14 @@ export function reviewTargetPayload(target: AgentReviewTarget): unknown {
   }
 }
 
-export function collaborationModePayload(status: AgentSessionStatus, mode: AgentCollaborationMode, defaultModel?: string): unknown {
+export function collaborationModePayload(status: AgentSessionStatus, mode: AgentCollaborationMode): unknown {
   // Codex expects a complete settings object for collaboration mode changes.
   // Relay reuses the current session metadata and lets Codex fill unavailable
   // optional settings with its defaults.
   return {
     mode,
     settings: {
-      model: status.model ?? defaultModel ?? requiredModelError(),
+      model: status.model ?? requiredModelError(),
       reasoning_effort: status.reasoningEffort ?? null,
       developer_instructions: null,
     },
@@ -155,7 +163,7 @@ export function collaborationModePayload(status: AgentSessionStatus, mode: Agent
 }
 
 function requiredModelError(): never {
-  throw new Error("Codex app-server did not advertise a default model for collaboration mode.");
+  throw new Error("Codex app-server did not provide the current thread model. Refresh the thread before changing collaboration mode.");
 }
 
 export function toTurnCompletedEvent(sessionKey: string, value: unknown): AgentTurnCompletedEvent {
@@ -267,7 +275,7 @@ export function applyThreadSettings(status: AgentSessionStatus, value: unknown):
   if (!settings) return;
   status.model = getString(settings, "model") ?? status.model;
   status.modelProvider = getString(settings, "modelProvider") ?? status.modelProvider;
-  status.reasoningEffort = getString(settings, "effort") ?? status.reasoningEffort;
+  if (settings.effort === null || typeof settings.effort === "string") status.reasoningEffort = settings.effort;
   status.approvalPolicy = summarizeUnknown(settings.approvalPolicy) ?? status.approvalPolicy;
   status.approvalsReviewer = getString(settings, "approvalsReviewer") ?? status.approvalsReviewer;
   status.sandboxPolicy = summarizeUnknown(settings.sandboxPolicy) ?? status.sandboxPolicy;

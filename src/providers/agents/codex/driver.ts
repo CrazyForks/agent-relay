@@ -367,7 +367,6 @@ export class CodexDriver implements AgentDriver {
   private readonly terminalTurns = new Map<string, number>();
   private readonly turnStallWatches = new Map<string, TurnStallWatch>();
   private appServerVersion?: string;
-  private defaultModel?: string;
   private currentGatewayUrl?: string;
   private readonly relayInstanceId = randomUUID();
   private gatewayEpoch?: string;
@@ -496,8 +495,9 @@ export class CodexDriver implements AgentDriver {
     const input = userInputPayload(text, options?.attachments, options?.images);
     const method = running.status.activeTurnId ? "turn/steer" : "turn/start";
     const gateway = this.usesGateway();
+    if (options?.collaborationMode && (!gateway || options.collaborationModeExplicit)) await this.refreshCurrentThreadSettings(running);
     const collaborationMode = options?.collaborationMode && (!gateway || options.collaborationModeExplicit)
-      ? collaborationModePayload(running.status, options.collaborationMode, this.defaultModel)
+      ? collaborationModePayload(running.status, options.collaborationMode)
       : undefined;
     const clientUserMessageId = this.usesGateway()
       ? options?.clientUserMessageId ?? `agent-relay:${randomUUID()}`
@@ -567,6 +567,20 @@ export class CodexDriver implements AgentDriver {
     return { turnId: resultTurnId, ...(collaborationModeApplied ? { collaborationModeApplied: true } : {}) };
   }
 
+  private async refreshCurrentThreadSettings(running: RunningSession): Promise<void> {
+    const threadId = running.status.threadId!;
+    const revision = running.settingsRevision ?? 0;
+    const result = asRecord(await this.request("thread/read", { threadId, includeTurns: false }));
+    // A newer settings notification can arrive while the read is in flight.
+    // Do not overwrite it with the older snapshot returned by that read.
+    if (running.status.threadId !== threadId || (running.settingsRevision ?? 0) !== revision) return;
+    const snapshot = { ...running.status };
+    applyThreadMetadata(snapshot, asRecord(result?.thread));
+    running.status.model = snapshot.model;
+    running.status.reasoningEffort = snapshot.reasoningEffort;
+    this.mirrorThreadStatus(running.status.sessionKey);
+  }
+
   private applyResumedTurnState(status: AgentSessionStatus, result: unknown): void {
     const thread = asRecord(asRecord(result)?.thread);
     const initialTurnsPage = asRecord(asRecord(result)?.initialTurnsPage);
@@ -590,6 +604,7 @@ export class CodexDriver implements AgentDriver {
       turn_id: activeTurnId,
       reason,
     });
+    const settingsRevision = running.settingsRevision ?? 0;
     let result: Record<string, unknown> | undefined;
     try {
       result = asRecord(await this.request("thread/read", { threadId, includeTurns: true }));
@@ -607,7 +622,10 @@ export class CodexDriver implements AgentDriver {
     const current = this.sessions.get(key);
     if (!current || current.status.threadId !== threadId || current.status.activeTurnId !== activeTurnId) return "unknown";
     const thread = asRecord(result?.thread);
+    const currentSettings = { model: current.status.model, reasoningEffort: current.status.reasoningEffort };
     applyThreadMetadata(current.status, thread);
+    if ((current.settingsRevision ?? 0) !== settingsRevision) Object.assign(current.status, currentSettings);
+    this.refreshThreadWaitingState(threadId);
     const turns = Array.isArray(thread?.turns) ? thread.turns : [];
     const matchingRaw = turns.find((value) => getTurnId({ turn: value }) === activeTurnId);
     const matchingSnapshot = turnSnapshot(matchingRaw);
@@ -761,11 +779,12 @@ export class CodexDriver implements AgentDriver {
     const mode = getString(result, "collaborationMode");
     if (mode !== "plan" && mode !== "default") throw new Error("Relay Gateway returned an invalid collaboration mode.");
     if (mode === running.status.collaborationMode && running.status.collaborationModeApplied) return mode;
+    await this.refreshCurrentThreadSettings(running);
     this.requestedModeChanges.set(running.status.threadId!, { sessionKey: key, mode, createdAt: Date.now() });
     try {
       await this.request("thread/settings/update", {
         threadId: running.status.threadId,
-        collaborationMode: collaborationModePayload(running.status, mode, this.defaultModel),
+        collaborationMode: collaborationModePayload(running.status, mode),
       });
     } catch (error) {
       const pending = this.requestedModeChanges.get(running.status.threadId!);
@@ -1503,7 +1522,6 @@ export class CodexDriver implements AgentDriver {
       ? modelResult.data.map(toModelSummary).filter((model): model is AgentModelSummary => Boolean(model))
       : [];
     if (models.length === 0) throw new Error("Codex capability probe failed: model/list returned no usable models.");
-    this.defaultModel = models.find((model) => model.isDefault)?.model ?? models.find((model) => model.isDefault)?.id ?? models[0]?.model ?? models[0]?.id;
     const collaborationResult = asRecord(await this.request("collaborationMode/list", {}, { ensureWritable: false }));
     const modes = Array.isArray(collaborationResult?.data)
       ? collaborationResult.data.map((value) => getString(asRecord(value), "mode")).filter((mode): mode is string => Boolean(mode))
@@ -1584,7 +1602,10 @@ export class CodexDriver implements AgentDriver {
       const sessionKeys = startedThreadId ? this.sessionKeysForThread(startedThreadId) : [];
       for (const sessionKey of sessionKeys) {
         const running = this.sessions.get(sessionKey);
-        if (running) applyThreadMetadata(running.status, asRecord(params?.thread));
+        if (running) {
+          applyThreadMetadata(running.status, asRecord(params?.thread));
+          running.settingsRevision = (running.settingsRevision ?? 0) + 1;
+        }
       }
       if (startedThreadId) this.refreshThreadWaitingState(startedThreadId);
       this.logger.debug("codex.thread_started", { thread_id: startedThreadId, session_keys: sessionKeys.join(",") });
@@ -1772,6 +1793,11 @@ export class CodexDriver implements AgentDriver {
     if (message.method === "thread/settings/updated") {
       const before = settingsSnapshot(running.status);
       applyThreadSettings(running.status, params?.threadSettings);
+      running.settingsRevision = (running.settingsRevision ?? 0) + 1;
+      // Publish the native values and their revision to every scope before UI
+      // delivery can yield. A concurrent read in another scope must see this
+      // revision even when the first scope's IM presentation is queued.
+      this.mirrorThreadStatus(key);
       const changes = changedSettings(before, settingsSnapshot(running.status));
       if (Object.keys(changes).length) await this.emitActivity(key, { kind: "settings", changes }, params);
       return;
@@ -2504,6 +2530,7 @@ export class CodexDriver implements AgentDriver {
         if (!identityKeys.has(property) && !(property in sourceRecord)) delete targetRecord[property];
       }
       Object.assign(target.status, source.status, identity);
+      target.settingsRevision = source.settingsRevision;
     }
   }
 

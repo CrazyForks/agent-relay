@@ -493,6 +493,12 @@ fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify({ args: process.arg
           else if (method === "model/list") send({ data: [{ id: "gpt-test", model: "gpt-test", isDefault: true }] });
           else if (method === "collaborationMode/list") send({ data: [{ mode: "default" }, { mode: "plan" }] });
           else if (method === "thread/resume") send({ thread: { id: params?.threadId, status: { type: "idle" } }, initialTurnsPage: { data: [], nextCursor: null } });
+          else if (method === "thread/read") send({ thread: {
+            id: params?.threadId,
+            model: params?.threadId === "fresh-thread" ? "gpt-thread-config" : "native-shared-custom",
+            reasoningEffort: params?.threadId === "fresh-thread" ? "high" : null,
+            status: { type: "idle" },
+          } });
           else if (method === "thread/start") send({
             thread: { id: "fresh-thread", status: { type: "idle" } },
             model: "gpt-thread-config",
@@ -616,7 +622,7 @@ fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify({ args: process.arg
         threadId: "shared-thread",
         collaborationMode: {
           mode: "plan",
-          settings: { model: "gpt-test", developer_instructions: null },
+          settings: { model: "native-shared-custom", reasoning_effort: null, developer_instructions: null },
         },
       });
       expect(driver.getStatus(first.sessionKey)).toMatchObject({ collaborationMode: "plan", collaborationModeApplied: true });
@@ -653,4 +659,81 @@ fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify({ args: process.arg
       server.stop(true);
     }
   });
+});
+
+describe("Gateway native current settings", () => {
+  for (const scenario of ["unknown model", "newer settings notification", "queued settings notification", "legacy omitted snapshot settings"]) {
+    test(`Plan preserves ${scenario}`, async () => {
+      const received: Record<string, unknown>[] = [];
+      let releaseSettingsPresentation!: () => void;
+      const settingsPresentation = new Promise<void>((resolve) => { releaseSettingsPresentation = resolve; });
+      let settingsPresentationStarted = false;
+      const server = Bun.serve({
+        hostname: "127.0.0.1", port: 0,
+        fetch(request, bunServer) {
+          if (bunServer.upgrade(request)) return undefined;
+          return new Response("not found", { status: 404 });
+        },
+        websocket: {
+          message(socket, data) {
+            const message = JSON.parse(String(data)) as Record<string, unknown>;
+            received.push(message);
+            const params = message.params as Record<string, unknown> | undefined;
+            const send = (result: unknown) => socket.send(JSON.stringify({ id: message.id, result }));
+            switch (message.method) {
+              case "initialize": send({ userAgent: "codex-cli 0.159.2" }); break;
+              case "agent-relay/control/hello": send({ version: RELAY_CONTROL_PROTOCOL_VERSION, gatewayEpoch: "settings-test" }); break;
+              case "model/list": send({ data: [{ id: "catalog-default-must-not-be-used", isDefault: true }] }); break;
+              case "collaborationMode/list": send({ data: [{ mode: "default" }, { mode: "plan" }] }); break;
+              case "thread/resume": send({ thread: { id: "settings-thread", status: { type: "idle" }, ...(scenario === "legacy omitted snapshot settings" ? {} : { model: scenario === "unknown model" ? null : "old-model", reasoningEffort: "high" }) }, ...(scenario === "legacy omitted snapshot settings" ? { model: "legacy-effective-model", reasoningEffort: "medium" } : {}), initialTurnsPage: { data: [], nextCursor: null } }); break;
+              case "thread/backgroundTerminals/list": send({ data: [] }); break;
+              case "thread/goal/get": send({ goal: null }); break;
+              case "agent-relay/control/resync":
+                socket.send(JSON.stringify({ method: "agent-relay/control/snapshot", params: { gatewayEpoch: "settings-test", threadId: "settings-thread", revision: 0, consistency: "live", threadState: { threadId: "settings-thread", collaborationMode: "default", collaborationModeApplied: true, threadStatus: "idle", waitingOn: null, revision: 0, updatedAt: Date.now() }, commands: [] } }));
+                send({ gatewayEpoch: "settings-test", revision: 0 });
+                break;
+              case "agent-relay/control/threadState/update": send({ collaborationMode: params?.mode }); break;
+              case "thread/read":
+                if (scenario === "newer settings notification" || scenario === "queued settings notification") {
+                  socket.send(JSON.stringify({ method: "thread/settings/updated", params: { threadId: "settings-thread", threadSettings: { model: "newest-native-model", effort: null } } }));
+                  setTimeout(() => send({ thread: { id: "settings-thread", model: "stale-snapshot-model", reasoningEffort: "high" } }), 10);
+                } else send({ thread: { id: "settings-thread", ...(scenario === "legacy omitted snapshot settings" ? {} : { model: null, reasoningEffort: null }) } });
+                break;
+              case "thread/settings/update": send({}); break;
+              case "thread/unsubscribe": send({}); break;
+            }
+          },
+        },
+      });
+      const driver = new CodexDriver({ codexBin: fakeCodexBin(), gatewayUrl: `ws://127.0.0.1:${server.port}`, sandbox: "workspace-write", approval: "on-request" }, async (event) => {
+        if (scenario === "queued settings notification" && event.type === "activity" && event.activity.kind === "settings") {
+          settingsPresentationStarted = true;
+          await settingsPresentation;
+        }
+      }, () => undefined);
+      try {
+        const first = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd(), threadId: "settings-thread" });
+        const second = await driver.start({ conversationId: 2, workspaceName: "demo", workspacePath: process.cwd(), threadId: "settings-thread" });
+        if (scenario === "unknown model") {
+          await expect(driver.syncThreadCollaborationMode(second.sessionKey, "default", { operation: "set", mode: "plan" })).rejects.toThrow("current thread model");
+          expect(received.filter((message) => message.method === "thread/settings/update")).toHaveLength(0);
+        } else {
+          await driver.syncThreadCollaborationMode(second.sessionKey, "default", { operation: "set", mode: "plan" });
+          const model = scenario === "legacy omitted snapshot settings" ? "legacy-effective-model" : "newest-native-model";
+          const effort = scenario === "legacy omitted snapshot settings" ? "medium" : null;
+          expect(received.find((message) => message.method === "thread/settings/update")?.params).toEqual({ threadId: "settings-thread", collaborationMode: { mode: "plan", settings: { model, reasoning_effort: effort, developer_instructions: null } } });
+          expect(first.model).toBe(model);
+          expect(second.reasoningEffort).toBe(effort);
+          if (scenario === "queued settings notification") expect(settingsPresentationStarted).toBe(true);
+        }
+        releaseSettingsPresentation();
+        await Bun.sleep(20);
+        await driver.release(first.sessionKey);
+        await driver.release(second.sessionKey);
+      } finally {
+        releaseSettingsPresentation();
+        server.stop(true);
+      }
+    });
+  }
 });

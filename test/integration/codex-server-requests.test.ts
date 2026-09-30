@@ -326,7 +326,8 @@ describe("CodexDriver server requests and recovery", () => {
     await driver.stop(status.sessionKey);
   });});
 
-test("keeps command and stdin callbacks on one item independent", async () => {
+describe("Codex 0.159 interactive semantics", () => {
+  test("keeps command and stdin callbacks on one item independent", async () => {
     const fake = fakeCodexBin();
     const events: AgentOutputEvent[] = [];
     const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
@@ -347,7 +348,7 @@ test("keeps command and stdin callbacks on one item independent", async () => {
     await driver.release(status.sessionKey);
   });
 
-test("fails closed when a native RPC approval identity is reused with changed content", async () => {
+  test("fails closed when a native RPC approval identity is reused with changed content", async () => {
     const fake = fakeCodexBin();
     const events: AgentOutputEvent[] = [];
     const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
@@ -361,6 +362,67 @@ test("fails closed when a native RPC approval identity is reused with changed co
     expect(status.waitingForApproval).toBe(false);
     await driver.release(status.sessionKey);
   });
+
+  test("nonblocking questions preserve output and steer while awaiting an answer", async () => {
+    const fake = fakeCodexBin();
+    const events: AgentOutputEvent[] = [];
+    const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
+    const status = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd() });
+    await driver.send(status.sessionKey, "nonblocking question");
+    await sleep(100);
+    expect(events).toContainEqual(expect.objectContaining({ type: "user_input_request", requestId: 920, isBlocking: false }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "message", chunk: "Working while you decide" }));
+    expect(status.waitingForUserInput).toBe(false);
+    await driver.send(status.sessionKey, "second while active");
+    expect(readLog(fake)).toContain('"method":"turn/steer"');
+    await driver.respond(status.sessionKey, 920, { answers: { mode: { answers: ["Later"] } } });
+    expect(status.activeTurnId).toBe("turn-1");
+    expect(status.waitingForUserInput).toBe(false);
+    await driver.release(status.sessionKey);
+  });
+
+  test("resolving async input or one approval preserves other blocking callbacks across scopes", async () => {
+    const fake = fakeCodexBin();
+    const events: AgentOutputEvent[] = [];
+    const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
+    const first = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd(), threadId: "thread-1" });
+    const second = await driver.start({ conversationId: 2, workspaceName: "demo", workspacePath: process.cwd(), threadId: "thread-1" });
+    await driver.send(first.sessionKey, "concurrent questions");
+    await sleep(100);
+    expect(events).toContainEqual(expect.objectContaining({ type: "user_input_request", requestId: 921, isBlocking: true }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "approval_request", requestId: 922, commandExecutionKind: "command" }));
+    for (const current of [first, second]) expect(current).toMatchObject({ waitingForUserInput: true, waitingForApproval: true });
+    await driver.respond(first.sessionKey, 920, { answers: {} });
+    for (const current of [first, second]) expect(current).toMatchObject({ waitingForUserInput: true, waitingForApproval: true });
+    await Promise.all([driver.respond(first.sessionKey, 921, { answers: {} }), driver.respond(second.sessionKey, 922, { decision: "accept" })]);
+    for (const current of [first, second]) expect(current).toMatchObject({ waitingForUserInput: false, waitingForApproval: true });
+    await driver.respond(first.sessionKey, 923, { decision: "decline" });
+    for (const current of [first, second]) expect(current).toMatchObject({ waitingForUserInput: false, waitingForApproval: false });
+    await driver.release(first.sessionKey);
+    await driver.release(second.sessionKey);
+  });
+
+  test("BTW forwards nonblocking questions and approval identity without changing the parent", async () => {
+    const fake = fakeCodexBin();
+    const parentEvents: AgentOutputEvent[] = [];
+    const sideEvents: AgentOutputEvent[] = [];
+    const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { parentEvents.push(event); }, () => undefined);
+    const status = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd() });
+    const side = await driver.openSideConversation(status.sessionKey, { eventSessionKey: "side", onEvent: (event) => { sideEvents.push(event); } });
+    await driver.sendSideConversationInput(status.sessionKey, side.threadId, { text: "nonblocking question" });
+    await sleep(100);
+    expect(sideEvents).toContainEqual(expect.objectContaining({ type: "user_input_request", isBlocking: false, requestId: 920 }));
+    await driver.respond("side", 920, { answers: {} });
+    await driver.sendSideConversationInput(status.sessionKey, side.threadId, { text: "approval callbacks" });
+    await sleep(100);
+    expect(sideEvents).toContainEqual(expect.objectContaining({ type: "approval_request", approvalId: "stdin-callback", commandExecutionKind: "writeStdin" }));
+    expect(parentEvents).toEqual([]);
+    expect(status.waitingForApproval).toBe(false);
+    expect(status.waitingForUserInput).toBe(false);
+    await driver.closeSideConversation(status.sessionKey, side.threadId);
+    await driver.release(status.sessionKey);
+  });
+});
 
 describe("native approval callback aliases", () => {
   for (const scenario of ["approval aliases", "approval alias conflict", "approval kinds", "approval unknown kind"]) {
@@ -401,4 +463,36 @@ describe("native approval callback aliases", () => {
       await driver.release(status.sessionKey);
     });
   }
+});
+
+test("native resolutions and a late clear status cannot clear a different blocking callback", async () => {
+  const fake = fakeCodexBin();
+  const events: AgentOutputEvent[] = [];
+  const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
+  const status = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd() });
+  await driver.send(status.sessionKey, "concurrent native resolutions");
+  await sleep(100);
+  expect(status).toMatchObject({ waitingForApproval: true, waitingForUserInput: false, activeTurnId: "turn-1" });
+  for (const requestId of [920, 921, 922]) expect(events).toContainEqual(expect.objectContaining({ type: "server_request_resolved", requestId }));
+  await expect(driver.respond(status.sessionKey, 922, { decision: "accept" })).rejects.toThrow("already been resolved");
+  await driver.respond(status.sessionKey, 923, { decision: "accept" });
+  expect(status.waitingForApproval).toBe(false);
+  await driver.release(status.sessionKey);
+});
+
+test("terminal completion retires a nonblocking question without blocking the turn", async () => {
+  const fake = fakeCodexBin();
+  const events: AgentOutputEvent[] = [];
+  const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
+  const status = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd() });
+  await driver.send(status.sessionKey, "nonblocking then complete");
+  await sleep(100);
+  expect(events).toContainEqual(expect.objectContaining({ type: "server_request_resolved", requestId: 920 }));
+  expect(status.activeTurnId).toBeUndefined();
+  expect(status.waitingForUserInput).toBe(false);
+  await expect(driver.respond(status.sessionKey, 920, { answers: {} })).rejects.toThrow("no longer pending");
+  await expect(driver.respond(status.sessionKey, "unknown-request", { decision: "accept" })).rejects.toThrow("no longer pending");
+  await sleep(20);
+  expect(readLog(fake)).not.toContain('"id":920,"result"');
+  await driver.release(status.sessionKey);
 });

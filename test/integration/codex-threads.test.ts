@@ -229,3 +229,24 @@ describe("CodexDriver thread operations", () => {
   });
 
 });
+
+test("clears native effort before Plan and preserves null through a fork", async () => {
+  const fake = fakeCodexBin();
+  const events: AgentOutputEvent[] = [];
+  const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
+  const status = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd() });
+  await driver.send(status.sessionKey, "settings cleared");
+  await sleep(100);
+  expect(status.reasoningEffort).toBeNull();
+  expect(status.model).toBe("gpt-native-custom");
+  expect(events).toContainEqual(expect.objectContaining({ type: "activity", activity: { kind: "settings", changes: { reasoningEffort: "(default)" } } }));
+  await driver.send(status.sessionKey, "plan after clearing", { collaborationMode: "plan" });
+  const messages = readLog(fake).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const modeTurn = messages.find((message) => message.method === "turn/start" && message.params.collaborationMode);
+  expect(modeTurn.params.collaborationMode.settings).toEqual({ model: "gpt-native-custom", reasoning_effort: null, developer_instructions: null });
+  expect(messages).toContainEqual(expect.objectContaining({ method: "thread/read", params: { threadId: "thread-1", includeTurns: false } }));
+  await driver.forkThread(status.sessionKey);
+  expect(status.reasoningEffort).toBeNull();
+  expect(status.model).toBe("gpt-native-custom");
+  await driver.release(status.sessionKey);
+});
