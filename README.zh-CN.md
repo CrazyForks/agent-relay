@@ -48,7 +48,7 @@
 npx @asuka1127/agent-relay install
 ```
 
-> **包名：**请使用 [`@asuka1127/agent-relay`](https://www.npmjs.com/package/@asuka1127/agent-relay)。无 scope 的 `agent-relay` 属于另一个项目，请勿用 `npx agent-relay` 或 `npm install -g agent-relay` 安装本项目。
+> **包名**：请使用 [`@asuka1127/agent-relay`](https://www.npmjs.com/package/@asuka1127/agent-relay)。无 scope 的 `agent-relay` 属于另一个项目，请勿用 `npx agent-relay` 或 `npm install -g agent-relay` 安装本项目。
 
 `install` 是唯一的“安装并配置”入口：先预览包版本及安装位置，经确认后将当前 scoped 版本持久安装到用户自己的 npm prefix，再打开已安装副本的**英文配置向导**。保存配置不会启动 relay。
 
