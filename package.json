@@ -3,7 +3,6 @@
   "version": "0.2.0",
   "description": "Remote-control local Codex CLI sessions from Telegram or Lark.",
   "type": "module",
-  "private": true,
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -71,5 +70,9 @@
     "LICENSE",
     "SECURITY.md",
     "CHANGELOG.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

@@ -114,7 +114,7 @@ See the README for Telegram and Lark/Feishu setup.
 
 - [ ] Obtain explicit approval to publish under the verified npm account/scope; this change alone is not publication authorization
 - [ ] Confirm `@asuka1127/agent-relay` ownership and version availability; never publish/use the unrelated unscoped `agent-relay`
-- [ ] Keep `private: true` until release is approved, then remove it deliberately and publish with the appropriate public scoped access
+- [ ] For an authorized release, remove `private: true` deliberately and set `publishConfig.access` to `public` with the official npm registry
 - [ ] Run `bun run check` and `npm run test:package` against the final tree
 - [ ] Inspect `npm pack --dry-run --json`: include CLI, helper, all relative runtime/Gateway assets and docs; exclude credentials, .env, SQLite/state, logs, caches, tests and toolchain artifacts
 - [ ] Verify the local tarball `npx ... agent-relay install --package <local.tgz>` flow in a clean directory without global Bun: explicit installation confirmation, persistent prefix, installed-copy wizard, retry/cancellation, no PATH changes, and private config persistence outside package/cache
@@ -123,7 +123,10 @@ See the README for Telegram and Lark/Feishu setup.
 - [ ] Confirm `install` is the only public setup command in help and argument validation, and its handoff runs private installed setup without a public configuration alias
 - [ ] Verify default launch and `start` with missing configuration exit with instructions to run `install`, in both interactive and non-interactive terminals, without opening setup
 - [ ] Verify the source `npm pack` + `bun run cli install --package <local.tgz>` workflow and ensure npm dependency installation remains non-interactive, with no setup lifecycle script
-- [ ] After authorized publication, independently verify `npx @asuka1127/agent-relay install` against the registry before describing the public one-command path as available
+- [ ] Publish the exact inspected/tested tarball with `npm publish /absolute/path/to/package.tgz --access public`; do not repack or publish the working directory
 - [ ] Verify Linux/macOS/Windows runtime compatibility on supported x64/arm64 targets before advertising them as tested
-- [ ] Confirm both README files label unpublished examples accurately; only remove the release-status warning after registry publication has been independently verified
-- [ ] Keep npm credentials/OTP entry in the user's trusted login flow; never put registry tokens in Git or chat
+- [ ] After authorized publication, independently verify the registry name, version, public access, dist-tag and tarball integrity; check the registry before retrying an uncertain publish because versions are immutable
+- [ ] From a fresh HOME, empty npm cache and empty working directory with no global Bun or source references, run `npx @asuka1127/agent-relay@0.2.0 install`, complete the real English wizard using dummy credentials with provider checks skipped, then verify saved config, installed rerun/cancellation, `doctor`, bundled runtime and helper assets
+- [ ] Push the tested release tree without force, verify the exact remote commit and wait for its required CI results; report Linux-only smoke coverage separately from untested native Windows/macOS flows
+- [ ] Check both README files and quickstarts against the verified release result before announcing availability
+- [ ] Keep npm credentials/OTP entry in the user's trusted login flow; never put registry tokens in Git or chat; log out of temporary publishing sessions and remove their isolated config after release

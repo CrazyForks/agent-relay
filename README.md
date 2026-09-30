@@ -69,11 +69,11 @@ Run `agent-relay gateway setup` once for a persistent npm installation (or `scri
 
 ## Install with npm / npx
 
-> **Release status:** this checkout implements `@asuka1127/agent-relay` 0.2.0, but this version has not been published to npm yet. The unscoped `agent-relay` package belongs to another project: do **not** use `npx agent-relay` or `npm install -g agent-relay` for this repository. Use the local tarball workflow below until an authorized scoped release is available.
+> **Package name:** use [`@asuka1127/agent-relay`](https://www.npmjs.com/package/@asuka1127/agent-relay). The unscoped `agent-relay` package belongs to another project: do **not** use `npx agent-relay` or `npm install -g agent-relay` for this repository.
 
-### One command to install and configure (after publication)
+### One command to install and configure
 
-Once this scoped version is published, run:
+Install from npm and open configuration without cloning this repository:
 
 ```bash
 npx @asuka1127/agent-relay install
@@ -83,7 +83,7 @@ npx @asuka1127/agent-relay install
 
 Bot creation and account login remain manual. The wizard guides you to Telegram BotFather or the Feishu/Lark developer console and asks for the credentials and allowlisted IDs you supply. Install and sign into Codex separately. Saving configuration does not start the relay, configure platform-console permissions/events, or install the experimental Gateway launcher.
 
-### Try this checkout now (no registry release needed)
+### Install a local checkout or release tarball
 
 From a checkout containing these CLI changes, prepare a local package:
 
@@ -98,7 +98,7 @@ Use the tarball name printed by `npm pack`, replace both paths below with its ac
 npx --package=/absolute/path/asuka1127-agent-relay-0.2.0.tgz agent-relay install --package /absolute/path/asuka1127-agent-relay-0.2.0.tgz
 ```
 
-The first `--package` tells npx where to run the installer from; the second tells the installer which local tarball to persist, instead of trying the unpublished registry version. The tarball must contain the matching scoped package name and version. Use only a package you trust: npm installs dependencies and runs their installation scripts.
+The first `--package` tells npx where to run the installer from; the second tells the installer which local tarball to persist, instead of downloading the registry version. The tarball must contain the matching scoped package name and version. Use only a package you trust: npm installs dependencies and runs their installation scripts.
 
 ### Installation location and everyday access
 
@@ -115,7 +115,7 @@ If configuration is cancelled or fails after npm succeeds, the persistent packag
 
 The npm path requires Node.js 20+ and npm. It includes the official [`bun@1.3.11`](https://www.npmjs.com/package/bun/v/1.3.11) runtime dependency, its platform binary and non-interactive installer, so **a global Bun install is not required**. Linux/macOS/Windows on x64/arm64 are supported by that runtime; see [Bun system requirements](https://bun.com/docs/installation). The binary adds roughly 100 MB of installed runtime storage. `install` explicitly invokes npm; the normal runtime launcher does not download software. With `--ignore-scripts` or `--omit=optional`, Bun may be missing; reinstall normally or explicitly set `AGENT_RELAY_BUN_PATH` to an existing compatible Bun executable.
 
-If you prefer managing a conventional global npm installation yourself, the following is an alternative **after publication**. Unlike `install`, plain `npm install -g` does not open a wizard:
+If you prefer managing a conventional global npm installation yourself, the following is an alternative. Unlike `install`, plain `npm install -g` does not open a wizard:
 
 ```bash
 npm install -g @asuka1127/agent-relay
@@ -161,7 +161,7 @@ bun run cli install --package /absolute/path/asuka1127-agent-relay-0.2.0.tgz
 bun run cli start
 ```
 
-For this unpublished version, use the tarball name printed by `npm pack` and replace the example path with its actual absolute path. `bun run cli install` uses the same persistent npm installation workflow, so it requires Node.js 20+ and npm and opens the installed copy's wizard; it does not run a separate source-only setup. Both the source CLI and installed CLI can then use the saved private configuration.
+Use the tarball name printed by `npm pack` and replace the example path with its actual absolute path. `bun run cli install` uses the same persistent npm installation workflow, so it requires Node.js 20+ and npm and opens the installed copy's wizard; it does not run a separate source-only setup. Both the source CLI and installed CLI can then use the saved private configuration.
 
 The original `.env` workflow also remains supported: copy `.env.example` to `.env`, edit it, and run `bun run start`. Source `bun run start` continues to read the checkout's `.env`; `bun run cli start` uses the new per-user CLI configuration. The source lifecycle scripts `scripts/relay.*` remain checkout-specific and are not installed with the npm package; use the foreground CLI with your preferred process supervisor for an npm installation.
 
@@ -250,7 +250,6 @@ Current providers:
 Known limitations:
 
 - Folder attachments and automatic archive extraction are not supported.
-- This npm version is not published yet; use the local tarball or source workflow above until publication is verified.
 - Codex is currently the only implemented agent backend.
 
 ## Contributing and support

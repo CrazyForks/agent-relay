@@ -2,9 +2,9 @@
 
 All notable changes to agent-relay will be documented in this file.
 
-The project is pre-1.0; npm distribution is being prepared and remains unpublished.
+The project is pre-1.0. The npm distribution uses the scoped name `@asuka1127/agent-relay`.
 
-## 0.2.0 (unreleased)
+## 0.2.0 - 2026-09-30
 
 - Add the `@asuka1127/agent-relay` npm package/Node executable and official pinned Bun runtime dependency, with global installation and npx tarball support without global Bun
 - Make `install` the sole installation/configuration entry point: persist the scoped package, open the masked English setup wizard, and reuse the current persistent installation for reconfiguration, including conventional global and custom-prefix installs

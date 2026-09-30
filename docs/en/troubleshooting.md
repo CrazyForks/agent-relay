@@ -4,7 +4,7 @@ This page covers the most common setup problems. Do not share bot tokens, app se
 
 ## Installation or the setup wizard fails
 
-Use the scoped package `@asuka1127/agent-relay`. The unscoped `agent-relay` package belongs to another project. This version is not published yet; use the [local tarball workflow](../../README.md#try-this-checkout-now-no-registry-release-needed) until publication has been verified.
+Use the scoped package `@asuka1127/agent-relay`. The unscoped `agent-relay` package belongs to another project. Use `npx @asuka1127/agent-relay install` for the registry package, or the [local tarball workflow](../../README.md#install-a-local-checkout-or-release-tarball) to test a checkout.
 
 `install` needs Node.js 20+, npm, network access for dependencies, and an interactive terminal for its English configuration wizard. For a fresh installation, it installs into a persistent user-owned npm prefix, then opens the wizard. From an existing persistent installation, it detects and reuses that installation's prefix, including a custom `--prefix` or a conventional npm global prefix. Plain `npm install -g` only installs the package; use `agent-relay install` afterward if you choose that alternative.
 

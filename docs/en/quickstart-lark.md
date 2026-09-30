@@ -6,13 +6,13 @@ Use an enterprise self-built app with a Bot capability, not a group webhook-only
 
 Install Codex CLI 0.145.0+ separately, sign in yourself, and check `codex --version` on the trusted machine that will run relay.
 
-**After npm publication**, one command installs a persistent copy and opens the English configuration wizard:
+One command installs a persistent copy from npm and opens the English configuration wizard; no source checkout is needed:
 
 ```bash
 npx @asuka1127/agent-relay install
 ```
 
-This version is **not published yet**. Use the [equivalent local tarball command](../../README.md#try-this-checkout-now-no-registry-release-needed) now. npm/npx includes Bun. `install` is the only installation/configuration entry point. The installer asks before installation and continues directly into configuration. Use its printed absolute executable commands, or follow its optional manual `PATH` instructions to use `agent-relay` as shown below.
+For a local build, use the [equivalent tarball command](../../README.md#install-a-local-checkout-or-release-tarball). npm/npx includes Bun. `install` is the only installation/configuration entry point. The installer asks before installation and continues directly into configuration. Use its printed absolute executable commands, or follow its optional manual `PATH` instructions to use `agent-relay` as shown below.
 
 Choose Feishu China for [open.feishu.cn/app](https://open.feishu.cn/app), or Lark international for [open.larksuite.com/app](https://open.larksuite.com/app). Credentials and region must match. Sign into the console and create/configure the app yourself; the installer never logs in, creates the app, grants permissions, or publishes it. Run `agent-relay install` from the installed executable to reconfigure later; it reuses that installation's prefix, including a custom or conventional global prefix.
 

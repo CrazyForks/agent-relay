@@ -68,11 +68,11 @@ npm 持久安装后先执行一次 `agent-relay gateway setup`（源码方式使
 
 ## npm / npx 安装
 
-> **发布状态：**当前代码已实现 `@asuka1127/agent-relay` 0.2.0，但此版本尚未发布到 npm。无 scope 的 `agent-relay` 属于另一个项目，请勿用 `npx agent-relay` 或 `npm install -g agent-relay` 安装本项目。正式授权发布前，请使用下面的本地 tarball 方式。
+> **包名：**请使用 [`@asuka1127/agent-relay`](https://www.npmjs.com/package/@asuka1127/agent-relay)。无 scope 的 `agent-relay` 属于另一个项目，请勿用 `npx agent-relay` 或 `npm install -g agent-relay` 安装本项目。
 
-### 一条命令完成安装并进入配置（正式发布后）
+### 一条命令完成安装并进入配置
 
-该 scoped 版本正式发布后，运行：
+无需克隆源码，直接从 npm 安装并进入配置：
 
 ```bash
 npx @asuka1127/agent-relay install
@@ -82,7 +82,7 @@ npx @asuka1127/agent-relay install
 
 创建机器人和账号登录仍需手动完成。向导会引导你打开 Telegram BotFather 或飞书/Lark 开发者后台，并填写自己的凭据及操作者 ID。Codex 也需要单独安装并自行登录。保存配置不会启动 relay、替你设置平台权限/事件，或安装实验性 Gateway 代理。
 
-### 现在即可使用：从当前代码打包安装
+### 从本地源码或 release tarball 安装
 
 在包含这些 CLI 改动的代码目录中准备本地包：
 
@@ -97,7 +97,7 @@ npm pack
 npx --package=/absolute/path/asuka1127-agent-relay-0.2.0.tgz agent-relay install --package /absolute/path/asuka1127-agent-relay-0.2.0.tgz
 ```
 
-前一个 `--package` 告诉 npx 从哪里运行安装器，后一个告诉安装器持久安装哪个本地 tarball，避免请求尚未发布的 registry 版本。tarball 中的 scoped 包名和版本必须匹配。只使用可信的安装包：npm 会安装依赖并执行依赖的安装脚本。
+前一个 `--package` 告诉 npx 从哪里运行安装器，后一个告诉安装器持久安装哪个本地 tarball，而不是下载 registry 版本。tarball 中的 scoped 包名和版本必须匹配。只使用可信的安装包：npm 会安装依赖并执行依赖的安装脚本。
 
 ### 安装位置与日常使用
 
@@ -114,7 +114,7 @@ npm 安装成功后，如果取消配置或保存失败，包仍会保留。使�
 
 npm 方式需要 Node.js 20+ 和 npm，包含官方 [`bun@1.3.11`](https://www.npmjs.com/package/bun/v/1.3.11) 运行时依赖、对应平台的二进制及非交互安装脚本，**无需预装全局 Bun**。运行时支持 Linux/macOS/Windows 的 x64/arm64，系统限制见 [Bun 安装文档](https://bun.com/docs/installation)。运行时二进制会增加约 100 MB 的安装体积。`install` 会显式调用 npm；正常运行的 relay 启动器不会下载程序。使用 `--ignore-scripts` 或 `--omit=optional` 可能导致 Bun 不可用，此时正常重新安装，或把 `AGENT_RELAY_BUN_PATH` 指向已安装的兼容 Bun 可执行文件。
 
-如果希望自己管理常规 npm 全局安装，**正式发布后**也可以使用下面的替代方式。普通 `npm install -g` 不会自动打开向导：
+如果希望自己管理常规 npm 全局安装，也可以使用下面的替代方式。普通 `npm install -g` 不会自动打开向导：
 
 ```bash
 npm install -g @asuka1127/agent-relay
@@ -160,7 +160,7 @@ bun run cli install --package /absolute/path/asuka1127-agent-relay-0.2.0.tgz
 bun run cli start
 ```
 
-当前版本尚未发布，请使用 `npm pack` 实际输出的 tarball 文件名，并把示例路径替换为它的真实绝对路径。`bun run cli install` 仍执行持久 npm 安装流程，需要 Node.js 20+ 和 npm，并打开已安装副本的向导，不会运行单独的源码配置入口。之后，源码 CLI 和已安装 CLI 均可使用保存的私有配置。
+请使用 `npm pack` 实际输出的 tarball 文件名，并把示例路径替换为它的真实绝对路径。`bun run cli install` 仍执行持久 npm 安装流程，需要 Node.js 20+ 和 npm，并打开已安装副本的向导，不会运行单独的源码配置入口。之后，源码 CLI 和已安装 CLI 均可使用保存的私有配置。
 
 原 `.env` 工作流仍可用：复制 `.env.example` 为 `.env`，编辑后运行 `bun run start`。源码 `bun run start` 继续读取当前源码目录的 `.env`；`bun run cli start` 则使用新的用户级配置。`scripts/relay.*` 生命周期脚本仍仅服务源码目录，不随 npm 包安装；npm 安装后可将前台 CLI 交给自己的进程管理器。
 
@@ -247,7 +247,6 @@ agent-relay 的一个重要用法，是用正在运行的 agent-relay 远程迭�
 已知限制：
 
 - 暂不支持文件夹附件及自动解压。
-- 当前 npm 版本尚未发布；发布验证完成前，请使用上面的本地 tarball 或源码方式。
 - 当前只有 Codex 这一种 Agent backend。
 
 ## 贡献和支持
