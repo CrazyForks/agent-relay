@@ -1,54 +1,53 @@
-# Lark/飞书快速上手
+# 飞书 / Lark 快速开始
 
-如果你想通过 Lark 或飞书远程控制本地 Codex，可以按这个流程配置。
+使用开启机器人能力的企业自建应用，不是仅支持群 webhook 的自定义机器人。
 
-## 1. 准备本地工具
+## 1. 安装并选择区域
 
-确认已安装：
-
-- Bun 1.3 或更新版本。
-- Git。
-- 可用的 Codex CLI。
+先按 [npm/npx 安装说明](../../README.zh-CN.md#npm--npx-安装) 操作，注意未发布时使用本地 tarball。npm/npx 包含 Bun；源码方式需要 Bun 1.3+。另外安装并登录 Codex CLI 0.145.0+。
 
 ```bash
-bun --version
 codex --version
+agent-relay init
 ```
 
-## 2. 创建自建应用
+中国飞书选择 [open.feishu.cn/app](https://open.feishu.cn/app)，国际 Lark 选择 [open.larksuite.com/app](https://open.larksuite.com/app)，凭据必须与区域对应。源码可用 `bun run init` / `bun run cli start`，原 `.env` + `bun run start` 也保留。
 
-在 Lark 或飞书开发者后台创建自建应用。
+## 2. 创建应用，收集凭据和 ID
 
-启用：
+1. 创建企业自建应用，在应用能力中启用**机器人**，从凭证与基础信息复制 App ID 和 App Secret，填入本地向导，Secret 输入会被掩码
+2. 文本及交互卡片使用应用/租户身份权限：`im:message.p2p_msg:readonly`（单聊）、`im:message:send_as_bot`（以机器人发送）、需要群聊时增加 `im:message.group_at_msg:readonly`。无需为了配置而申请以用户身份发送或广泛通讯录访问权限
+3. 操作者白名单使用**当前应用专属**的 `open_id`（`ou_...`）。同一人在不同应用的 open_id 不同，不能替换为 user_id/union_id。按官方 [Open ID 指南](https://open.feishu.cn/document/faq/trouble-shooting/how-to-obtain-openid)，进入 API Explorer → 选择当前应用 → 发送消息 → open_id → 快速复制 open_id → 选择自己；只复制 ID 不需要真的发送测试消息。会话白名单使用 `chat_id`（`oc_...`）
+4. 完成工作区、状态、Codex 设置。只有明确同意后，向导才会向所选区域官方 [`tenant_access_token/internal`](https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal) 发送 App ID/Secret，返回的临时 token 不保存。成功只说明凭据有效，不代表机器人能力、事件、权限、发布或可用范围已完成
+5. 保存私有配置，不要提交到 Git。长连接流程无需另行收集 OAuth 凭据、Encrypt Key 或 Verification Token
 
-- 机器人消息能力。
-- 消息接收事件。
-- 卡片 action 事件。
+按实际功能额外申请：
 
-agent-relay 使用长连接接收事件，不需要公网 callback URL。
+- 上传/发送图片及文件：`im:resource`
+- 下载收到消息中的图片/文件：`im:message:readonly`，这是较广的读消息权限，仅在需要收附件时启用
+- 任务状态表情回应：`im:message.reactions:write_only`
 
-## 3. 配置 agent-relay
+最小文本/卡片权限不覆盖全部附件或表情功能。参考官方[消息资源下载](https://open.feishu.cn/document/server-docs/im-v1/message/get-2)及 [Lark IM 权限表](https://github.com/larksuite/cli/blob/main/skills/lark-im/SKILL.md)。
+
+## 3. 先启动连接，再完成控制台配置
+
+**保存长连接订阅时必须有本地客户端在线**，不要等全部订阅配置完成后才首次启动。
 
 ```bash
-git clone https://github.com/zwx1127/agent-relay.git
-cd agent-relay
-bun install
-cp .env.example .env
+agent-relay doctor
+agent-relay start
 ```
 
-编辑 `.env`：
+如果首次查询机器人身份阻止建立连接，先发布包含机器人能力和必要权限的初始版本，然后启动 relay。保持它运行，分别完成：
 
-```dotenv
-IM_PROVIDER=lark
-LARK_APP_ID=cli_xxx
-LARK_APP_SECRET=xxx
-LARK_DOMAIN=feishu
-ALLOWED_USER_IDS=ou_xxx
-ALLOWED_CONVERSATION_IDS=oc_xxx
-WORKSPACE_ROOT=/absolute/path/to/workspaces
-```
+1. 开发配置 → 事件与回调 → **事件配置**：选择使用长连接接收事件，添加接收消息 v2.0 / `im.message.receive_v1`
+2. 单独进入**回调配置**：选择使用长连接接收回调，添加卡片回传交互 / `card.action.trigger`
+3. 版本管理与发布：创建并发布版本，按租户要求完成管理员审批；应用可用范围只加入预期操作者，不要默认扩到所有人。修改权限/能力/订阅后重新发布
+4. 在飞书/Lark 中找到机器人，私聊发送 `/relay`，测试文字和卡片按钮。应用可用范围与 relay 本地白名单必须同时满足
 
-飞书中国区应用使用 `LARK_DOMAIN=feishu`，Lark 国际版应用使用 `LARK_DOMAIN=lark`。
+无需公网 callback URL 或隧道。`doctor` 仅做本地检查。文字正常但按钮无反应时，先检查**回调配置**；找不到应用或不能给自己发消息时，检查发布、审批和可用范围。初次配置只运行一个 relay，多个长连接客户端可能分摊事件，并非全部广播。
+
+官方参考：[交互卡片机器人配置](https://open.feishu.cn/document/uAjLw4CM/uMzNwEjLzcDMx4yM3ATM/develop-a-card-interactive-bot/faqs)、[长连接配置](https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/request-url-configuration-case)、[接收消息事件](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive)。
 
 ## 4. 可选群聊配置
 
@@ -64,7 +63,7 @@ WORKSPACE_ROOT=/absolute/path/to/workspaces
 ## 5. 启动和使用
 
 ```bash
-bun run start
+agent-relay start
 ```
 
 然后在 Lark 或飞书里：

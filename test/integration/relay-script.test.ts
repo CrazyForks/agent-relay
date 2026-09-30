@@ -9,6 +9,7 @@ const unixOnlyTest = process.platform === "win32" ? test.skip : test;
 let roots: string[] = [];
 const fastRelayEnv = {
   ...process.env,
+  AGENT_RELAY_BUN_PATH: process.execPath,
   AGENT_RELAY_START_CHECK_DELAY_SECONDS: "0.05",
   AGENT_RELAY_STOP_POLL_INTERVAL_SECONDS: "0.05",
   AGENT_RELAY_RESTART_WORKER_DELAY_SECONDS: "0.05",

@@ -66,22 +66,85 @@
 
 先执行一次 `scripts/gateway.* setup`，需要接力工作时再手动启动 Gateway。Gateway 与 Relay 使用完全独立的脚本和生命周期，而 Gateway 与唯一 app-server 属于同一故障域。使用 `/resume` 加入已有 thread。多个原生 Codex 客户端和 IM scope 可以共享同一个 thread，不设归属限制；新的用户消息、agent 进度和 Relay 支持的 thread 指令状态会同步到其他已加入的 scope，活动 turn 中的普通输入使用 Steer 语义，审批或输入请求由第一个回答的客户端胜出。Gateway 模式继承共享 Codex app-server 的配置；Relay 请求不会覆盖这些配置，唯一例外是用户明确选择 Default 或 Plan 后的一次性模式切换。有界指令快照只存在于 Gateway 内存中，可跨 Relay 重启/清理恢复，但不能跨 Gateway/app-server 重启；此时采用 Codex 原生重启语义，包括 Plan 回到 Default。它不提供 Queue 操作，不增加语义状态 journal，也不重放或事后追赶离线输出。请阅读[实验性接力工作](docs/zh-CN/experimental-relay-work.md)，了解 Windows、macOS 和 Linux 设置、生命周期语义以及完整移除方法。
 
-## 快速开始
+## npm / npx 安装
+
+> **发布状态：**当前代码已实现 `@asuka1127/agent-relay` 安装包，但此版本尚未发布到 npm。无 scope 的 `agent-relay` 属于另一个项目，请勿用 `npx agent-relay` 或 `npm install -g agent-relay` 安装本项目。正式授权发布前，请使用下面的本地 tarball 安装方式。
+
+### 现在即可使用：从当前代码打包安装
+
+在包含本次 CLI 改动的代码目录中执行：
+
+```bash
+npm install
+npm pack
+# 使用 npm pack 实际输出的文件名：
+npm install -g ./asuka1127-agent-relay-0.2.0.tgz
+agent-relay init
+agent-relay doctor
+agent-relay start
+```
+
+也可以不全局安装，直接通过 npx 运行 tarball。将路径替换为真实的绝对路径，每次执行都保留 `--package`：
+
+```bash
+npx --package=/absolute/path/asuka1127-agent-relay-0.2.0.tgz agent-relay init
+npx --package=/absolute/path/asuka1127-agent-relay-0.2.0.tgz agent-relay doctor
+npx --package=/absolute/path/asuka1127-agent-relay-0.2.0.tgz agent-relay start
+```
+
+### 正式发布到 npm 后
+
+下面是未来正式发布后的 registry 命令，当前并不表示包已经上线：
+
+```bash
+npm install -g @asuka1127/agent-relay
+agent-relay init
+agent-relay start
+
+# 或者，无需全局安装：
+npx @asuka1127/agent-relay init
+npx @asuka1127/agent-relay start
+```
+
+npm 方式需要 Node.js 20+ 和 npm，会安装官方 [`bun@1.3.11`](https://www.npmjs.com/package/bun/v/1.3.11) 运行时依赖、对应平台的二进制及非交互安装脚本，**无需预装全局 Bun**。运行时支持 Linux/macOS/Windows 的 x64/arm64，系统限制见 [Bun 安装文档](https://bun.com/docs/installation)。运行时二进制会增加约 100 MB 的安装体积；relay 启动器本身不会下载任何程序。使用 `--ignore-scripts` 或 `--omit=optional` 可能导致 Bun 不可用，此时正常重新安装，或把 `AGENT_RELAY_BUN_PATH` 指向已安装的兼容 Bun 可执行文件。Codex 需要另外安装并登录，向导不会创建账号或代为登录。
+
+### 配置向导与日常命令
+
+`init` 引导配置 Telegram 或飞书/Lark 机器人、凭据、用户/会话白名单、工作区根目录、SQLite 状态文件、Codex 可执行文件、沙箱及审批选项，并可选择启用本地 helper 或实验性 Gateway 开关。Secret 输入会被掩码；只有明确同意后，才会把凭据发送到所选平台的官方 API 做只读检查。检查不能证明消息链路、权限或应用发布已经完成。向导不会自动创建机器人、修改 webhook、安装 Gateway 代理或启动 relay。保存后先运行 `doctor`、再 `start`，向机器人发送 `/relay` 做端到端验证。
+
+- Telegram：通过官方 [BotFather](https://t.me/BotFather) 创建机器人，填入 token 和本人数字 user ID。可选检查仅调用 `getMe`、`getWebhookInfo`，不会消费 `getUpdates` 或删除已有 webhook
+- 飞书/Lark：在对应区域的开发者后台创建自建应用，启用机器人能力，填入 App ID/Secret 和该应用专属的 `open_id` 白名单。先保存配置并启动 relay，再在控制台保存长连接消息事件与卡片回调，完成权限、版本发布及可用范围设置，详见[飞书/Lark 指南](docs/zh-CN/quickstart-lark.md)。凭据有效不等于这些步骤已完成
+- `agent-relay` 或 `agent-relay start`：以前台方式运行；无配置且有交互终端时，进入首次配置向导，保存后退出，再运行 `start` 才会连接机器人
+- `agent-relay init`：首次配置或重新配置；Ctrl+C 或拒绝保存不会改写已有文件
+- `agent-relay doctor`：检查本地配置、路径和 Codex 版本，不访问机器人 API
+- `agent-relay config path`：仅显示配置文件位置，不显示 secret
+- `agent-relay gateway <setup|start|stop|status|remove>`：显式管理实验性 Gateway。长期运行 Gateway 建议使用持久的全局安装，避免 npx 缓存被清理；移动/升级安装位置后，按 [Gateway 指南](docs/zh-CN/experimental-relay-work.md) 重新 setup
+
+配置保存在安装包和工作区之外：Linux/macOS 默认 `$XDG_CONFIG_HOME/agent-relay/config.json` 或 `~/.config/agent-relay/config.json`；Windows 为 `%APPDATA%\agent-relay\config.json`。用 `--config /absolute/path/config.json` 或 `AGENT_RELAY_CONFIG` 指定其他位置。POSIX 下新建目录权限为 0700，配置以 0600 原子写入；对于已有的共享目录会拒绝保存，不会擅自修改目录权限。Windows 下应存放在自己的用户目录，并使用仅本人可访问的 ACL。配置内的凭据以明文保存，切勿提交或分享。
+
+向导保存的 workspace/SQLite 路径均为绝对路径，不随启动目录变化。默认状态文件位于配置旁的 `state/agent-relay.sqlite`；工作区根目录应该是代码/项目目录，不是 npm 安装目录。shell 环境变量优先于保存的配置。新 CLI 不会自动读取当前启动目录中的 `.env`。
+
+从源码方式迁移已有配置（不会改写原 `.env`）：
+
+```bash
+agent-relay init --env-file /absolute/path/to/agent-relay/.env
+# 或只使用该文件启动一次，不写入用户配置：
+agent-relay start --env-file /absolute/path/to/agent-relay/.env
+```
+
+仅迁移已知的 relay 设置；相对文件路径以显式 `.env` 所在目录为基准。该次运行中 `--env-file` 替代用户配置文件作为来源，shell 环境变量仍优先。非交互/CI 场景不会弹出向导：先准备好私有配置或 `.env`，再指定路径运行。不要把 secret 放到命令行参数中。
+
+### 从源码运行（保留原方式）
 
 ```bash
 git clone https://github.com/zwx1127/agent-relay.git
 cd agent-relay
 bun install
-cp .env.example .env
+bun run init
+bun run cli start
 ```
 
-编辑 `.env`，填入 Telegram bot token 或 Lark/飞书应用凭证，然后启动：
-
-```bash
-bun run start
-```
-
-向 bot 发送 `/relay`，选择或创建工作区，然后像平常一样向 Codex 发送消息。
+原 `.env` 工作流仍可用：复制 `.env.example` 为 `.env`，编辑后运行 `bun run start`。源码 `bun run start` 继续读取当前源码目录的 `.env`；`bun run cli start` 则使用新的用户级配置。`scripts/relay.*` 生命周期脚本仍仅服务源码目录，不随 npm 包安装；npm 安装后可将前台 CLI 交给自己的进程管理器。
 
 ## 使用指南
 
@@ -93,7 +156,7 @@ bun run start
 
 ## 最低要求
 
-- Bun 1.3 或更新版本。
+- npm/npx 方式需要 Node.js 20+ 和 npm；源码方式需要 Bun 1.3+（npm 安装包自带固定版本的 Bun 运行时）。
 - Git。
 - 本地可用的 `codex` CLI，或通过 `CODEX_BIN` 指定完整路径。
 - Codex CLI 0.145.0 或更高版本需要支持 `codex app-server --listen stdio://`；实验代理会在内部使用 CLI 的 WebSocket 传输，用户不再选择单独的 remote 模式。

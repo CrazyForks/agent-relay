@@ -2,49 +2,37 @@
 
 Use this guide when you want to control local Codex from Telegram.
 
-## 1. Prepare local tools
+## 1. Install and prepare local tools
 
-Install or confirm:
-
-- Bun 1.3 or newer.
-- Git.
-- Codex CLI available as `codex`.
+Follow [npm/npx installation](../../README.md#install-with-npm--npx), including the unpublished-release warning and tarball option. npm/npx includes the official Bun runtime; source users need Bun 1.3+. Install Codex CLI 0.145.0+ separately and sign in on this trusted machine. Git is needed for normal code/version-control work.
 
 ```bash
-bun --version
 codex --version
+agent-relay init
 ```
 
-## 2. Create a bot
+For a source checkout, run `bun run init`, then `bun run cli start`; the original `.env` + `bun run start` flow is also supported.
 
-1. Open BotFather in Telegram.
-2. Create a bot.
-3. Copy the bot token.
-4. If you will use a group chat, keep the bot username handy.
+## 2. Create a bot and configure the wizard
 
-## 3. Configure agent-relay
+1. Open the official [BotFather](https://t.me/BotFather), send `/newbot`, choose a display name and unique username
+2. Copy the bot token into the wizard's **masked local prompt**. Do not paste it into URLs, command arguments, support tickets, or another bot
+3. Choose Telegram, enter your numeric operator user ID and optionally allowed chat IDs. Usernames and the bot's own ID are not your operator ID. Use a trusted source for your ID; never send an ID-lookup service your token
+4. Select your workspace root, separate state file and Codex executable. Keep workspace-write/on-request or stricter settings
+5. If you opt into validation, the token goes only to `api.telegram.org` for [`getMe`](https://core.telegram.org/bots/api#getme) and [`getWebhookInfo`](https://core.telegram.org/bots/api#getwebhookinfo). These do not consume queued updates or change the bot's webhook
+6. If an existing webhook is detected, use another bot or deliberately review/retire the previous integration yourself. The wizard will not delete it. One polling process should use a token at a time
+7. Review the redacted summary and approve saving the private configuration. A skipped/failed check can be saved for later correction; that is not a readiness claim
+
+## 3. Start and verify
 
 ```bash
-git clone https://github.com/zwx1127/agent-relay.git
-cd agent-relay
-bun install
-cp .env.example .env
+agent-relay doctor
+agent-relay start
 ```
 
-Edit `.env`:
+`doctor` is local-only; it does not test bot authentication, Codex sign-in or delivery. Start the relay, open a private chat with the bot, and send `/relay`. Select a workspace, send a normal prompt, and test a button. **Starting the existing Telegram runtime skips stale queued updates**; use a fresh message after start. Setup validation does not perform this backlog skip.
 
-```dotenv
-IM_PROVIDER=telegram
-TELEGRAM_BOT_TOKEN=123:abc
-ALLOWED_USER_IDS=123456
-WORKSPACE_ROOT=/absolute/path/to/workspaces
-```
-
-For a group bot, also set:
-
-```dotenv
-ALLOWED_CONVERSATION_IDS=-100123456
-```
+The config is outside the package/cache, with absolute workspace/state paths; see [configuration location and migration](../../README.md#configuration-wizard-and-everyday-commands). To keep an existing source `.env` for one run, use `agent-relay start --env-file /absolute/path/.env`.
 
 ## 4. Optional group chat setup
 
@@ -52,15 +40,16 @@ For group chats:
 
 1. Add the bot to the group.
 2. Set `ALLOWED_CONVERSATION_IDS` to the group chat ID.
-3. Set `TELEGRAM_BOT_USERNAME` if automatic username discovery is not reliable in your environment.
-4. Mention the bot in text, image/file captions, and slash commands. Keep normal mentions separated by spaces, for example `/relay @relay_bot` or `@relay_bot inspect this`.
+3. Keep [privacy mode](https://core.telegram.org/bots/features#privacy-mode) enabled for the initial test. Explicitly addressed `/relay@bot_username` commands work with it. Plain text mentions and media captions are not guaranteed to be delivered merely because relay recognizes them. If that full group workflow is needed, use BotFather `/setprivacy` → Disable and re-add the bot: **Telegram will then deliver all group messages to the bot**, although relay ignores unmentioned traffic. Do not grant group administrator privileges just for this workaround.
+4. Set `TELEGRAM_BOT_USERNAME` if automatic username discovery is not reliable in your environment.
+5. Mention the bot in text, image/file captions, and slash commands. Keep normal mentions separated by spaces, for example `/relay @relay_bot` or `@relay_bot inspect this`.
 
 Unmentioned group messages are ignored before authorization checks, so normal group traffic will not trigger the relay.
 
 ## 5. Start and use
 
 ```bash
-bun run start
+agent-relay start
 ```
 
 Then in Telegram:

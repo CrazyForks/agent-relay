@@ -67,22 +67,85 @@ Experimental relay work lets you begin in the native Codex CLI or the Windows/ma
 
 Run `scripts/gateway.* setup` once, then start Gateway manually whenever relay work is needed. Gateway and Relay have separate scripts and lifecycles, while Gateway and its one app-server form a single failure domain. Use `/resume` to join an existing thread. Multiple native Codex clients and IM scopes can share a thread without ownership restrictions; new user messages, agent progress, and Relay-supported thread command state are mirrored to the other attached scopes, ordinary input during an active turn uses Steer semantics, and the first client to answer an approval or input request wins. BTW mode is the exception: its ephemeral child, input, output, and status stay local to the originating IM scope and never enter shared Gateway state or the parent transcript. Gateway mode inherits Codex configuration from the shared app-server; Relay requests do not override it, except for a one-shot mode switch after the user explicitly selects Default or Plan. A bounded command snapshot exists only in Gateway memory and survives Relay restart/cleanup, but not Gateway/app-server restart; native restart semantics then apply, including Plan returning to Default. There is no Queue action, semantic state journal, offline output replay, or catch-up. See [Experimental relay work](docs/en/experimental-relay-work.md) for the Windows, macOS, and Linux setup, lifecycle semantics, and complete removal instructions.
 
-## Quick start
+## Install with npm / npx
+
+> **Release status:** this checkout implements `@asuka1127/agent-relay`, but this version has not been published to npm yet. The unscoped `agent-relay` package belongs to another project: do **not** use `npx agent-relay` or `npm install -g agent-relay` for this repository. Use the tarball workflow below until an authorized scoped release is available.
+
+### Try this checkout now (no registry release needed)
+
+From a checkout containing the npm CLI changes:
+
+```bash
+npm install
+npm pack
+# Use the tarball name printed by npm pack:
+npm install -g ./asuka1127-agent-relay-0.2.0.tgz
+agent-relay init
+agent-relay doctor
+agent-relay start
+```
+
+Or run the packed package without a global install. Replace the tarball path with its actual absolute path; repeat `--package` for each invocation:
+
+```bash
+npx --package=/absolute/path/asuka1127-agent-relay-0.2.0.tgz agent-relay init
+npx --package=/absolute/path/asuka1127-agent-relay-0.2.0.tgz agent-relay doctor
+npx --package=/absolute/path/asuka1127-agent-relay-0.2.0.tgz agent-relay start
+```
+
+### After this scoped package is published
+
+These registry commands are for the future published release, not a claim that it is available now:
+
+```bash
+npm install -g @asuka1127/agent-relay
+agent-relay init
+agent-relay start
+
+# Alternatively, no global package installation:
+npx @asuka1127/agent-relay init
+npx @asuka1127/agent-relay start
+```
+
+The npm path requires Node.js 20+ and npm. It installs the official [`bun@1.3.11`](https://www.npmjs.com/package/bun/v/1.3.11) runtime dependency, including its platform binary and non-interactive installer, so **a global Bun install is not required**. Linux/macOS/Windows on x64/arm64 are supported by that runtime; see [Bun system requirements](https://bun.com/docs/installation). The binary download adds roughly 100 MB of installed runtime storage. The relay launcher never downloads software itself. With `--ignore-scripts` or `--omit=optional`, Bun may be missing; reinstall normally or explicitly set `AGENT_RELAY_BUN_PATH` to an existing compatible Bun executable. Codex is installed and signed into separately; the wizard never creates accounts or signs you in.
+
+### Configuration wizard and everyday commands
+
+`init` guides you through Telegram or Feishu/Lark bot setup, credentials, operator/chat allowlists, workspace root, SQLite state, Codex discovery, sandbox/approval defaults, and optional local helpers or experimental Gateway flags. It uses masked secret input and asks before sending credentials to the selected provider's official API. Checks are read-only and cannot prove end-to-end delivery, permissions or publication. It never creates bots, changes webhooks, installs a Gateway proxy, or starts the relay. Finish with `doctor`, then `start` and send `/relay` to your bot.
+
+- Telegram: create a bot with [BotFather](https://t.me/BotFather), enter its token and your numeric user ID. Optional validation uses only `getMe` and `getWebhookInfo`; it never consumes `getUpdates` or deletes an existing webhook
+- Feishu/Lark: create a self-built app in the matching developer console, enable Bot capability, and supply App ID/Secret and app-specific `open_id` allowlists. Save and start relay **before** saving long-connection subscriptions in the console. Then configure message events and card callbacks, permissions, publication and app availability using the [detailed guide](docs/en/quickstart-lark.md). Credential validation cannot verify these console steps
+- `agent-relay` or `agent-relay start`: foreground process; with no configuration, an interactive terminal offers the wizard and exits after saving. Run `start` again to connect
+- `agent-relay init`: configure or reconfigure; Ctrl+C/declining save leaves the existing file unchanged
+- `agent-relay doctor`: local configuration, path and Codex version checks; it does not contact a bot API
+- `agent-relay config path`: show the selected file location without displaying secrets
+- `agent-relay gateway <setup|start|stop|status|remove>`: explicit experimental Gateway lifecycle. Prefer a persistent global install over an evictable npx cache for long-lived Gateway use; rerun setup after relocating/upgrading its installation, following the [Gateway guide](docs/en/experimental-relay-work.md)
+
+Configuration lives outside the package and outside the selected workspace: `$XDG_CONFIG_HOME/agent-relay/config.json` or `~/.config/agent-relay/config.json` on Linux/macOS; `%APPDATA%\agent-relay\config.json` on Windows. Override it with `--config /absolute/path/config.json` or `AGENT_RELAY_CONFIG`. `init` creates a private directory (0700) and atomically writes a private file (0600) on POSIX. It refuses shared directories rather than changing their permissions. On Windows, store it in your private profile and protect it with user-only ACLs. The file contains plaintext credentials: never commit or share it.
+
+Workspace and SQLite paths saved by `init` are absolute, independent of the launch directory. State defaults to `state/agent-relay.sqlite` beside the config file; the workspace root is your code/projects directory, not the package directory. Shell environment overrides saved settings. The installed CLI does not implicitly load `.env` from the launch directory.
+
+To migrate a source-checkout configuration (the original `.env` is left unchanged):
+
+```bash
+agent-relay init --env-file /absolute/path/to/agent-relay/.env
+# Or use that file for one run without creating a saved config:
+agent-relay start --env-file /absolute/path/to/agent-relay/.env
+```
+
+Only recognized relay settings are imported. Relative file paths are resolved relative to the explicit `.env` file. `--env-file` replaces the saved configuration source for that invocation; shell environment still wins. Non-interactive/CI runs never prompt: provision a private config or explicit `.env` first and pass its path. Never pass bot secrets as CLI arguments.
+
+### Run from source (existing workflow)
 
 ```bash
 git clone https://github.com/zwx1127/agent-relay.git
 cd agent-relay
 bun install
-cp .env.example .env
+bun run init
+bun run cli start
 ```
 
-Edit `.env` with a Telegram bot token or Lark/Feishu app credentials, then start the relay:
-
-```bash
-bun run start
-```
-
-Send `/relay` to the bot, select or create a workspace, then send a normal message to Codex.
+The original `.env` workflow also remains supported: copy `.env.example` to `.env`, edit it, and run `bun run start`. Source `bun run start` continues to read the checkout's `.env`; `bun run cli start` uses the new per-user CLI configuration. The source lifecycle scripts `scripts/relay.*` remain checkout-specific and are not installed with the npm package; use the foreground CLI with your preferred process supervisor for an npm installation.
 
 ## Setup guides
 
@@ -94,8 +157,8 @@ Send `/relay` to the bot, select or create a workspace, then send a normal messa
 
 ## Minimum requirements
 
-- Bun 1.3 or newer.
-- Git.
+- Node.js 20+ and npm for npm/npx; Bun 1.3+ for the source workflow (npm includes a pinned Bun runtime).
+- Git for Codex workspace/version-control operations (not required just to install a tarball).
 - A local `codex` CLI on `PATH`, or a full path set with `CODEX_BIN`.
 - Codex CLI 0.145.0 or newer with `codex app-server --listen stdio://`; the experimental launcher uses the CLI's WebSocket transport internally, so users do not select a separate remote mode.
 - A Telegram bot token, or a Lark/Feishu self-built app.

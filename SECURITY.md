@@ -31,3 +31,7 @@ Do not publish:
 - private workspace paths
 - prompt text or assistant output that should not be public
 - relay media under `.agent-relay/media`
+
+## Installed CLI configuration
+
+`agent-relay init` saves plaintext bot credentials in a private per-user JSON file outside the package and workspace. Keep it out of Git and backups shared with others. On POSIX, new directories/files use 0700/0600; shared target directories and symlink files are rejected. On Windows, use a private user-profile directory with user-only ACLs. The wizard masks secrets and never prints API error bodies. Optional checks transmit credentials only after informed approval to the selected official Telegram or Feishu/Lark API, reject redirects, and do not alter bot settings. Saved allowlists still require an end-to-end delivery test. npm installation includes the official pinned Bun runtime installer; the relay launcher itself does not download software.

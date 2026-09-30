@@ -68,7 +68,7 @@ export interface GatewayManagementConfig {
 }
 
 export function loadGatewayManagementConfig(env?: Env): GatewayManagementConfig {
-  const effectiveEnv = env ?? { ...loadDotEnvFile(), ...process.env };
+  const effectiveEnv = env ?? { ...(process.env.AGENT_RELAY_DISABLE_DOTENV === "1" ? {} : loadDotEnvFile()), ...process.env };
   const port = parsePositiveIntegerEnv(effectiveEnv, "EXPERIMENTAL_RELAY_GATEWAY_PORT", 18765);
   if (port > 65534) throw new Error("EXPERIMENTAL_RELAY_GATEWAY_PORT must be at most 65534.");
   return {

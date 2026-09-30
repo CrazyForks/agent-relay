@@ -74,7 +74,7 @@ export interface ShareServerRequestResult {
 }
 
 async function main(): Promise<void> {
-  const env = { ...loadDotEnvFile(), ...process.env };
+  const env = { ...(process.env.AGENT_RELAY_DISABLE_DOTENV === "1" ? {} : loadDotEnvFile()), ...process.env };
   if (!parseBooleanEnv(env, "EXPERIMENTAL_RELAY_WORK_ENABLED", false)) {
     throw new Error("Experimental relay work is disabled. Set EXPERIMENTAL_RELAY_WORK_ENABLED=true explicitly.");
   }

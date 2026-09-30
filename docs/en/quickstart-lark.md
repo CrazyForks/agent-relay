@@ -1,55 +1,53 @@
 # Lark/Feishu quickstart
 
-Use this guide when you want to control local Codex from Lark or Feishu.
+Use an enterprise self-built app with a Bot capability, not a group webhook-only custom bot.
 
-## 1. Prepare local tools
+## 1. Install and select the region
 
-Install or confirm:
-
-- Bun 1.3 or newer.
-- Git.
-- Codex CLI available as `codex`.
+Follow [npm/npx installation](../../README.md#install-with-npm--npx), including the unpublished-release warning and tarball option. npm/npx includes Bun; source users need Bun 1.3+. Install/sign in to Codex CLI 0.145.0+ separately.
 
 ```bash
-bun --version
 codex --version
+agent-relay init
 ```
 
-## 2. Create a self-built app
+Choose Feishu China for [open.feishu.cn/app](https://open.feishu.cn/app), or Lark international for [open.larksuite.com/app](https://open.larksuite.com/app). Credentials and region must match. Source users can run `bun run init` / `bun run cli start`; `.env` + `bun run start` remains available.
 
-Create a self-built app in the Lark or Feishu developer console.
+## 2. Create the app, collect credentials and IDs
 
-Enable:
+1. Create a self-built/internal app, enable **Bot** in its capabilities, and copy App ID and App Secret from Credentials & Basic Info into the local wizard. Secret input is masked
+2. Request application/tenant-identity permissions for text and interactive cards: `im:message.p2p_msg:readonly` (DMs), `im:message:send_as_bot` (send as bot), and `im:message.group_at_msg:readonly` if groups are needed. These do not require sending as a human or broad contact-directory lookup
+3. Enter allowed operator **open_id** values (`ou_...`) from this exact app. A person's open_id is different between apps; `user_id`/`union_id` are not interchangeable. The official [Open ID guide](https://open.feishu.cn/document/faq/trouble-shooting/how-to-obtain-openid) describes API Explorer → select this app → Send message → open_id → Quick copy open_id → select yourself; copying does not require sending a message. Optional conversation restrictions use `chat_id` (`oc_...`)
+4. Complete workspace/state/Codex settings. Optional credential validation sends App ID/Secret only to the selected official origin's [`tenant_access_token/internal`](https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal) endpoint; the temporary token is discarded. Success verifies credentials only, not Bot capability, events, permissions, release or availability
+5. Save the private configuration. Keep the file out of Git. Do not collect OAuth credentials, encryption keys or verification tokens for this long-connection flow
 
-- Bot messaging.
-- Message receive events.
-- Card action events.
-- The message reaction permission (`im:message.reactions:write_only` or `im:message`) if you want task status reactions.
+Additional feature permissions:
 
-agent-relay uses long-connection delivery, so it does not need a public callback URL.
+- Upload/send images and files: `im:resource`
+- Download inbound image/file resources: `im:message:readonly`, a broader read-message permission; enable only if you need inbound attachments
+- Task status reactions: `im:message.reactions:write_only`
 
-## 3. Configure agent-relay
+The minimum text/card scopes alone do not cover all attachment/reaction features. See official [message resources](https://open.feishu.cn/document/server-docs/im-v1/message/get-2) and [Lark IM permission table](https://github.com/larksuite/cli/blob/main/skills/lark-im/SKILL.md).
+
+## 3. Start the connection, then finish console setup
+
+**Keep a local client online before saving long-connection settings.** The console requires an active connection; don't wait for subscriptions to be complete before first starting relay.
 
 ```bash
-git clone https://github.com/zwx1127/agent-relay.git
-cd agent-relay
-bun install
-cp .env.example .env
+agent-relay doctor
+agent-relay start
 ```
 
-Edit `.env`:
+If bot-identity lookup prevents the first connection, publish an initial version with Bot capability and required permissions, then start relay. Leave it running while completing these separate console sections:
 
-```dotenv
-IM_PROVIDER=lark
-LARK_APP_ID=cli_xxx
-LARK_APP_SECRET=xxx
-LARK_DOMAIN=feishu
-ALLOWED_USER_IDS=ou_xxx
-ALLOWED_CONVERSATION_IDS=oc_xxx
-WORKSPACE_ROOT=/absolute/path/to/workspaces
-```
+1. Developer Configuration → Events & Callbacks → **Event Configuration**: choose long-connection event delivery; add Receive message v2.0 / `im.message.receive_v1`
+2. **Callback Configuration** separately: choose long-connection callback delivery; add Card action / `card.action.trigger`
+3. Version Management & Release: create/publish a version and complete administrator approval if required. Set availability to the intended operators, not automatically everyone. Republish after scope/feature/subscription changes
+4. Find the bot in Feishu/Lark, send `/relay` in a private chat, then test both a text prompt and a card button. App availability and relay's operator allowlist are separate requirements
 
-Use `LARK_DOMAIN=feishu` for Feishu China apps and `LARK_DOMAIN=lark` for Lark international apps.
+There is no public callback URL or tunnel. `doctor` performs local checks only. If text works but buttons do not, check the **callback** section first. If the app cannot be found or cannot message you, check release/approval/availability. Use one relay instance during setup; multiple long connections can load-balance events rather than broadcast them.
+
+Official references: [interactive-card bot setup](https://open.feishu.cn/document/uAjLw4CM/uMzNwEjLzcDMx4yM3ATM/develop-a-card-interactive-bot/faqs), [long-connection configuration](https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/request-url-configuration-case), [message event](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive).
 
 ## 4. Optional group chat setup
 
@@ -65,7 +63,7 @@ Unmentioned group messages are ignored before authorization checks, so normal gr
 ## 5. Start and use
 
 ```bash
-bun run start
+agent-relay start
 ```
 
 Then in Lark or Feishu:

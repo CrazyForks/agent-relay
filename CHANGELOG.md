@@ -2,7 +2,15 @@
 
 All notable changes to agent-relay will be documented in this file.
 
-The project is pre-1.0 and currently installs from source.
+The project is pre-1.0; npm distribution is being prepared and remains unpublished.
+
+## 0.2.0 (unreleased)
+
+- Add the `@asuka1127/agent-relay` npm package/Node executable and official pinned Bun runtime dependency, with global installation and npx tarball support without global Bun
+- Add masked interactive `init`, first-run setup, local `doctor`, explicit config/migration paths, and installed Gateway commands
+- Guide Telegram BotFather and Feishu/Lark self-built app setup with consent-based official-host credential checks, no webhook/queue changes, and clear manual publication/event requirements
+- Store private versioned configuration and state outside package caches/workspaces; preserve the source `.env` workflow and native Codex authority
+- Add focused setup/security tests and a clean packed-artifact npm/npx smoke check; update both README languages and provider guides
 
 ## Unreleased
 

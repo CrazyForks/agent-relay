@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./config.ts";
+import { loadConfig, type AppConfig } from "./config.ts";
 import { SQLiteStore } from "../storage/sqlite-store.ts";
 import { RelayController } from "../relay/controller.ts";
 import { TextLogger } from "../domain/logger.ts";
@@ -16,8 +16,7 @@ import { createImAdapter } from "../providers/im/factory.ts";
 import { createAgentDriver } from "../providers/agents/factory.ts";
 import { gatewayUrlForRelay, readRelayWorkControl, relayWorkControlPath } from "../gateway/control.ts";
 
-export async function main(): Promise<void> {
-  const config = loadConfig();
+export async function main(config: AppConfig = loadConfig()): Promise<void> {
   const logger = new TextLogger(config.logLevel);
   const store = new SQLiteStore(config.sqlitePath, logger);
   const imAdapter = createImAdapter(config, logger);

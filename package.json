@@ -1,8 +1,7 @@
 {
-  "name": "agent-relay",
-  "version": "0.1.0",
+  "name": "@asuka1127/agent-relay",
+  "version": "0.2.0",
   "description": "Remote-control local Codex CLI sessions from Telegram or Lark.",
-  "module": "src/main.ts",
   "type": "module",
   "private": true,
   "license": "MIT",
@@ -35,16 +34,43 @@
     "codex:gateway": "bun src/gateway/codex-launcher.ts",
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun test",
-    "test:codex-gateway-boundary": "bun scripts/codex-gateway-boundary-contract.ts"
+    "test:codex-gateway-boundary": "bun scripts/codex-gateway-boundary-contract.ts",
+    "init": "bun --no-env-file src/cli/main.ts init",
+    "cli": "bun --no-env-file src/cli/main.ts",
+    "test:package": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
+    "@types/bun": "latest",
     "typescript": "^5"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.63.1",
-    "ignore": "^7.0.5"
-  }
+    "ignore": "^7.0.5",
+    "bun": "1.3.11"
+  },
+  "bin": {
+    "agent-relay": "bin/agent-relay.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "files": [
+    "bin/",
+    "src/",
+    "docs/",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
+  ]
 }

@@ -108,3 +108,15 @@ bun run start
 
 See the README for Telegram and Lark/Feishu setup.
 ~~~
+
+## npm scoped distribution
+
+- [ ] Obtain explicit approval to publish under the verified npm account/scope; this change alone is not publication authorization
+- [ ] Confirm `@asuka1127/agent-relay` ownership and version availability; never publish/use the unrelated unscoped `agent-relay`
+- [ ] Keep `private: true` until release is approved, then remove it deliberately and publish with the appropriate public scoped access
+- [ ] Run `bun run check` and `npm run test:package` against the final tree
+- [ ] Inspect `npm pack --dry-run --json`: include CLI, helper, all relative runtime/Gateway assets and docs; exclude credentials, .env, SQLite/state, logs, caches, tests and toolchain artifacts
+- [ ] Verify npm/global and npx execution in a clean directory without global Bun; check first-run cancellation and private config persistence outside package/cache
+- [ ] Verify Linux/macOS/Windows runtime compatibility on supported x64/arm64 targets before advertising them as tested
+- [ ] Confirm both README files label unpublished examples accurately; only remove the release-status warning after registry publication has been independently verified
+- [ ] Keep npm credentials/OTP entry in the user's trusted login flow; never put registry tokens in Git or chat

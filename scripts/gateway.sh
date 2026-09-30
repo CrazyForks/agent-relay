@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BUN="${AGENT_RELAY_BUN_PATH:-bun}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMMAND="${1:-}"
 
@@ -21,10 +22,10 @@ case "$COMMAND" in
     ;;
 esac
 
-if ! command -v bun >/dev/null 2>&1; then
-  echo "bun is not available on PATH" >&2
+if ! command -v "$BUN" >/dev/null 2>&1; then
+  echo "Bun is not available; set AGENT_RELAY_BUN_PATH or add bun to PATH" >&2
   exit 1
 fi
 
 cd "$ROOT_DIR"
-exec bun src/gateway/manage.ts "$COMMAND"
+exec "$BUN" src/gateway/manage.ts "$COMMAND"

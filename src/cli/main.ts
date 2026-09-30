@@ -1,0 +1,133 @@
+import { existsSync, mkdirSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import metadata from "../../package.json";
+import { codexVersionSpawnCommand, parseCodexVersion, isCodexVersionSupported } from "../providers/agents/codex/spawn.ts";
+import { loadConfig, type Env } from "../runtime/config.ts";
+import { absoluteConfigPaths, defaultConfigPath, importEnvFile, mergeConfigEnv, readConfigFile, requireAbsoluteState, writeConfigFile } from "./config-file.ts";
+import { runWizard } from "./wizard.ts";
+
+export interface CliArgs { command: string; subcommand?: string; configPath: string; envFile?: string; }
+export function parseArgs(args: string[], env: Env = process.env): CliArgs {
+  let configPath = defaultConfigPath(env);
+  let envFile: string | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--config" || arg === "--env-file") {
+      const value = args[++i];
+      if (!value || value.startsWith("--")) throw new Error(`${arg} requires a path.`);
+      if (arg === "--config") configPath = resolve(value); else envFile = resolve(value);
+    } else if (arg === "--help" || arg === "-h") return { command: "help", configPath };
+    else if (arg === "--version" || arg === "-v") return { command: "version", configPath };
+    else if (arg.startsWith("-")) throw new Error("Unknown option. Run agent-relay --help; credentials must never be passed as command-line arguments.");
+    else positional.push(arg);
+  }
+  const command = positional[0] || "start";
+  if (!["init", "start", "doctor", "config", "gateway", "help", "version"].includes(command)) throw new Error("Unknown command. Run agent-relay --help.");
+  if (positional.length > (command === "config" || command === "gateway" ? 2 : 1)) throw new Error("Too many arguments. Run agent-relay --help.");
+  if (command === "config" && positional[1] !== "path") throw new Error("usage: agent-relay config path");
+  if (command === "gateway" && !["setup", "start", "stop", "status", "remove"].includes(positional[1] || "status")) throw new Error("usage: agent-relay gateway <setup|start|stop|status|remove>");
+  return { command, subcommand: positional[1], configPath, envFile };
+}
+
+const HELP = `${metadata.name} ${metadata.version}
+Usage: agent-relay [command] [--config <file>] [--env-file <file>]
+
+  init           Interactive private configuration + Telegram/Feishu/Lark guidance
+  start          Start in foreground (default); first run offers setup in a TTY
+  doctor         Check local configuration, paths, Bun and Codex; no bot network calls
+  config path    Print the selected configuration file path, never its credentials
+  gateway ...    Explicit experimental setup/start/stop/status/remove
+  --help         Show this help
+  --version      Show package version
+
+init does not start the relay. --env-file imports existing .env settings into init,
+or uses them for one start/doctor invocation. Implicit cwd .env files are ignored by
+this CLI. Existing source-checkout 'bun run start' keeps its .env behavior.
+Configuration: --config > AGENT_RELAY_CONFIG > per-user config.json.
+Values: shell environment > explicit --env-file OR saved config. No config files are
+merged together. Secrets are masked in init; never put them in CLI arguments.
+Gateway setup is separate, experimental, and can modify native client integration.
+`;
+
+export function redactCliError(error: unknown, env: Env): string {
+  let message = error instanceof Error ? error.message : "Operation failed.";
+  for (const key of ["TELEGRAM_BOT_TOKEN", "LARK_APP_SECRET", "LARK_APP_ID"]) {
+    const value = env[key];
+    if (value) message = message.split(value).join("[redacted]");
+  }
+  return message.replace(/\b\d{5,}:[A-Za-z0-9_-]{15,}\b/g, "[redacted]");
+}
+
+async function initialize(parsed: CliArgs, initial: Env): Promise<void> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Setup requires an interactive terminal (TTY). Run agent-relay init in a terminal, then use --config <file> for unattended start; or use an existing --env-file <file>.");
+  const result = await runWizard({ initial, configPath: parsed.configPath });
+  if (!result) { console.log("Setup cancelled; configuration was not changed."); process.exitCode = 130; return; }
+  writeConfigFile(parsed.configPath, result);
+  console.log(`Saved private configuration: ${parsed.configPath}`);
+  if (process.platform === "win32") console.log("Keep this file in your private Windows profile; POSIX chmod does not enforce Windows ACLs.");
+  console.log("Run agent-relay doctor, then agent-relay start with the same --config path (or AGENT_RELAY_CONFIG). Setup does not start a bot or a Gateway.");
+}
+
+async function doctor(env: Env, configPath: string): Promise<void> {
+  const config = loadConfig(env);
+  console.log(`Bun ${Bun.version}; config: ${configPath}; provider: ${config.imProvider}`);
+  let failed = false;
+  if (!existsSync(config.workspaceRoot) || !statSync(config.workspaceRoot).isDirectory()) {
+    console.error("Workspace root is missing or is not a directory. Create it or rerun init."); failed = true;
+  } else console.log(`Workspace root: ${config.workspaceRoot}`);
+  console.log(`State database: ${resolve(config.sqlitePath)}`);
+  const binary = Bun.which(config.codexBin) || (existsSync(config.codexBin) ? config.codexBin : undefined) || (process.platform === "win32" ? config.codexBin : undefined);
+  if (!binary) {
+    console.error("Codex was not found. Install/login to the official Codex CLI yourself, then rerun init or set CODEX_BIN."); failed = true;
+  } else {
+    const command = codexVersionSpawnCommand(binary);
+    const result = spawnSync(command.command, command.args, { encoding: "utf8", timeout: 5_000, windowsHide: true, windowsVerbatimArguments: command.windowsVerbatimArguments });
+    const version = parseCodexVersion(result.stdout ?? "");
+    if (result.error || result.status !== 0 || !version) {
+      console.error("Codex version check failed; its output is hidden. Verify CODEX_BIN manually."); failed = true;
+    } else if (!isCodexVersionSupported(version)) {
+      console.error("Codex CLI 0.145.0 or newer is required."); failed = true;
+    } else console.log(`Codex ${version} is available (authentication and bot delivery are not tested).`);
+  }
+  console.log("Bot credentials, webhook state, Feishu permissions/events/publication and Codex authentication are not verified by doctor. Use init for opt-in credential validation, then send /relay for an end-to-end check.");
+  if (failed) process.exitCode = 1;
+}
+
+export async function runCli(args = process.argv.slice(2)): Promise<void> {
+  const parsed = parseArgs(args);
+  if (parsed.command === "help") { console.log(HELP); return; }
+  if (parsed.command === "version") { console.log(metadata.version); return; }
+  if (parsed.command === "config") { console.log(parsed.configPath); return; }
+  const saved = parsed.envFile ? importEnvFile(parsed.envFile) : readConfigFile(parsed.configPath);
+  const initial = requireAbsoluteState(mergeConfigEnv(saved ?? {}, process.env), parsed.configPath);
+  try {
+    if (parsed.command === "init") return await initialize(parsed, initial);
+    if (parsed.command === "gateway") {
+      const entry = fileURLToPath(new URL("../gateway/manage.ts", import.meta.url));
+      const result = spawnSync(process.execPath, ["--no-env-file", "--no-install", entry, parsed.subcommand || "status"], {
+        stdio: "inherit", env: { ...process.env, ...initial, AGENT_RELAY_DISABLE_DOTENV: "1" },
+      });
+      if (result.error) throw new Error("Could not start Gateway management.");
+      process.exitCode = result.status ?? 1; return;
+    }
+    if (parsed.command === "doctor") return await doctor(initial, parsed.envFile || parsed.configPath);
+    if (!saved) {
+      try { loadConfig(initial); }
+      catch { return await initialize(parsed, initial); }
+    }
+    const config = loadConfig(absoluteConfigPaths(initial, process.cwd()));
+    // Private state by default, regardless of the caller's umask. Never write inside npm/npx caches.
+    process.umask(0o077);
+    mkdirSync(dirname(resolve(config.sqlitePath)), { recursive: true, mode: 0o700 });
+    const { main } = await import("../runtime/bootstrap.ts");
+    await main(config);
+  } catch (error) { throw new Error(redactCliError(error, initial)); }
+}
+
+if (import.meta.main) {
+  try { await runCli(); }
+  catch (error) { console.error(redactCliError(error, process.env)); process.exitCode = 1; }
+}

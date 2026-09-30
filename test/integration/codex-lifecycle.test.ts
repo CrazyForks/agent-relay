@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import metadata from "../../package.json";
 import { CodexDriver } from "../../src/providers/agents/codex/driver.ts";
 import { cleanupCodexHarness, createCodexTempDir, fakeCodexBin, fakeCodexCommandPath, readLog, writeNodeCommand } from "../support/codex-app-server-harness.ts";
 
@@ -25,7 +26,7 @@ describe("CodexDriver app-server lifecycle", () => {
       "thread/backgroundTerminals/list",
     ]);
     expect(messages[0]?.params).toMatchObject({
-      clientInfo: { name: "agent-relay", version: "0.1.0" },
+      clientInfo: { name: "agent-relay", version: metadata.version },
       capabilities: {
         experimentalApi: true,
         requestAttestation: false,

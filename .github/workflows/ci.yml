@@ -34,6 +34,20 @@ jobs:
       - name: Test
         run: bun test
 
+  npm-package-smoke:
+    name: npm and npx packed artifact (Node 20, no global Bun)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify packed installation and npx outside checkout
+        run: npm run test:package
+
   codex-contract-minimum:
     name: Codex contract (0.145.0)
     if: github.event_name != 'schedule'

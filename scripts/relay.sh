@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BUN="${AGENT_RELAY_BUN_PATH:-bun}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="$ROOT_DIR/.data"
 LOG_DIR="$ROOT_DIR/logs"
@@ -18,8 +19,8 @@ USAGE
 }
 
 ensure_bun() {
-  if ! command -v bun >/dev/null 2>&1; then
-    echo "bun is not available on PATH" >&2
+  if ! command -v "$BUN" >/dev/null 2>&1; then
+    echo "Bun is not available; set AGENT_RELAY_BUN_PATH or add bun to PATH" >&2
     exit 1
   fi
 }
@@ -47,10 +48,10 @@ proc_entry_matches_relay() {
   fi
 
   executable="${argv[0]##*/}"
-  [[ "$executable" == "bun" ]] || return 1
+  [[ "$executable" == "bun" || "$executable" == "bun.exe" ]] || return 1
   exe_path="$(readlink "$proc/exe" 2>/dev/null || true)"
   exe_name="${exe_path##*/}"
-  [[ "$exe_name" == "bun" ]] || return 1
+  [[ "$exe_name" == "bun" || "$exe_name" == "bun.exe" ]] || return 1
 
   if [[ "${argv[1]:-}" == "src/main.ts" || "${argv[1]:-}" == */src/main.ts ]]; then
     return 0
@@ -152,7 +153,7 @@ start() {
 
   (
     cd "$ROOT_DIR"
-    nohup bun src/main.ts >>"$LOG_FILE" 2>&1 &
+    nohup "$BUN" src/main.ts >>"$LOG_FILE" 2>&1 &
     printf '%s\n' "$!" >"$PID_FILE"
   )
 

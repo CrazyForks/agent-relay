@@ -87,7 +87,7 @@ export async function ensureRelayGateway(
   mkdirSync(dirname(statePath), { recursive: true });
 
   const gatewayMain = fileURLToPath(new URL("./main.ts", import.meta.url));
-  const child = spawn(process.execPath, [gatewayMain], {
+  const child = spawn(process.execPath, [...(process.env.AGENT_RELAY_DISABLE_DOTENV === "1" ? ["--no-env-file", "--no-install"] : []), gatewayMain], {
     cwd: process.cwd(),
     env: {
       ...process.env,
