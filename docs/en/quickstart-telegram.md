@@ -12,11 +12,11 @@ Install Codex CLI 0.145.0+ separately and sign in yourself on this trusted machi
 npx @asuka1127/agent-relay install
 ```
 
-This version is **not published yet**. Use the [equivalent local tarball command](../../README.md#try-this-checkout-now-no-registry-release-needed) now. npm/npx includes the official Bun runtime. The installer asks before installing, then continues directly into the wizard; no separate `init` command is needed.
+This version is **not published yet**. Use the [equivalent local tarball command](../../README.md#try-this-checkout-now-no-registry-release-needed) now. npm/npx includes the official Bun runtime. `install` is the only installation/configuration entry point. The installer asks before installing, then continues directly into the wizard.
 
-Use the absolute executable commands printed at the end, or follow its optional manual `PATH` instructions to use `agent-relay` as shown below. To reconfigure an existing installation, use `agent-relay init`. The installer does not create the bot or sign you into Telegram or Codex.
+Use the absolute executable commands printed at the end, or follow its optional manual `PATH` instructions to use `agent-relay` as shown below. To reconfigure an existing installation, run `agent-relay install` from its executable; it reuses that installation's prefix, including a custom or conventional global prefix. The installer does not create the bot or sign you into Telegram or Codex.
 
-For a source checkout, install Bun 1.3+, run `bun install` and `bun run init`, then `bun run cli start`; the original `.env` + `bun run start` flow is also supported.
+For a source checkout, install Bun 1.3+, run `bun install`, and follow the [source install workflow](../../README.md#run-from-source-existing-workflow): pack a local tarball and pass it to `bun run cli install --package /absolute/path/asuka1127-agent-relay-0.2.0.tgz`, then run `bun run cli start`. This setup command persists an npm installation and requires Node.js 20+ and npm. The original `.env` + `bun run start` flow is also supported.
 
 ## 2. Create a bot and configure the wizard
 

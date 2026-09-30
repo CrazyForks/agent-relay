@@ -119,6 +119,10 @@ See the README for Telegram and Lark/Feishu setup.
 - [ ] Inspect `npm pack --dry-run --json`: include CLI, helper, all relative runtime/Gateway assets and docs; exclude credentials, .env, SQLite/state, logs, caches, tests and toolchain artifacts
 - [ ] Verify the local tarball `npx ... agent-relay install --package <local.tgz>` flow in a clean directory without global Bun: explicit installation confirmation, persistent prefix, installed-copy wizard, retry/cancellation, no PATH changes, and private config persistence outside package/cache
 - [ ] Verify custom `--prefix`, configuration/migration forwarding, repeated installation, and the exact printed Unix/Windows executable commands
+- [ ] Run the installed executable's `install` command from both a custom prefix and a conventional npm global prefix; confirm reconfiguration reuses its own installation without creating a second copy
+- [ ] Confirm `install` is the only public setup command in help and argument validation, and its handoff runs private installed setup without a public configuration alias
+- [ ] Verify default launch and `start` with missing configuration exit with instructions to run `install`, in both interactive and non-interactive terminals, without opening setup
+- [ ] Verify the source `npm pack` + `bun run cli install --package <local.tgz>` workflow and ensure npm dependency installation remains non-interactive, with no setup lifecycle script
 - [ ] After authorized publication, independently verify `npx @asuka1127/agent-relay install` against the registry before describing the public one-command path as available
 - [ ] Verify Linux/macOS/Windows runtime compatibility on supported x64/arm64 targets before advertising them as tested
 - [ ] Confirm both README files label unpublished examples accurately; only remove the release-status warning after registry publication has been independently verified

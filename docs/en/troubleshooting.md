@@ -6,10 +6,10 @@ This page covers the most common setup problems. Do not share bot tokens, app se
 
 Use the scoped package `@asuka1127/agent-relay`. The unscoped `agent-relay` package belongs to another project. This version is not published yet; use the [local tarball workflow](../../README.md#try-this-checkout-now-no-registry-release-needed) until publication has been verified.
 
-`install` needs Node.js 20+, npm, network access for dependencies, and an interactive terminal for its English configuration wizard. It installs into a persistent user-owned npm prefix, then opens the wizard. Plain `npm install -g` only installs the package; use `agent-relay init` afterward if you choose that alternative.
+`install` needs Node.js 20+, npm, network access for dependencies, and an interactive terminal for its English configuration wizard. For a fresh installation, it installs into a persistent user-owned npm prefix, then opens the wizard. From an existing persistent installation, it detects and reuses that installation's prefix, including a custom `--prefix` or a conventional npm global prefix. Plain `npm install -g` only installs the package; use `agent-relay install` afterward if you choose that alternative.
 
 - If `agent-relay` is not found, use the exact executable path printed by `install`, or add its printed binary directory to your shell's `PATH`. Installation does not edit shell startup files
-- If setup was cancelled or could not save, the package may already be installed. Run its printed `init` command to retry configuration
+- If setup was cancelled or could not save, the package may already be installed. Run its printed `install` command to retry configuration; the installed executable reuses its own prefix, so you do not need to repeat a custom `--prefix`
 - If Bun is missing after installation with `--ignore-scripts` or `--omit=optional`, reinstall normally or point `AGENT_RELAY_BUN_PATH` at an existing compatible Bun executable
 - A non-interactive terminal cannot run the wizard. Configure in an interactive terminal first, then provide `--config` or `--env-file` for automated runs
 - If saving reports an unsafe config directory, choose a private directory you own. Do not weaken the permissions check or put credentials in a shared directory
@@ -17,6 +17,8 @@ Use the scoped package `@asuka1127/agent-relay`. The unscoped `agent-relay` pack
 The wizard never creates Telegram bots or Feishu/Lark apps, signs you into accounts, or finishes provider-console configuration. Those steps remain manual; see the [Telegram](quickstart-telegram.md) and [Feishu/Lark](quickstart-lark.md) guides.
 
 ## The relay does not start
+
+`agent-relay` and `agent-relay start` never open the configuration wizard. If configuration is missing, run `agent-relay install` in an interactive terminal, save configuration, and then start the relay.
 
 For an installed package, run these commands using `agent-relay` on `PATH` or the executable path printed by `install`:
 

@@ -8,7 +8,7 @@ Relay work lets the native Codex CLI, supported Codex Desktop apps, and IM-based
 
 ## Setup and manual lifecycle
 
-For an npm installation, use `agent-relay init` to enable the experimental Gateway flag in your private configuration. For the original source `.env` workflow, add:
+For an npm installation, use `agent-relay install` to enable the experimental Gateway flag in your private configuration. For the original source `.env` workflow, add:
 
 ```dotenv
 EXPERIMENTAL_RELAY_WORK_ENABLED=true
@@ -163,4 +163,4 @@ For source checkouts:
 ./scripts/gateway.sh remove
 ```
 
-Then disable the experimental flag with `agent-relay init` (or set `EXPERIMENTAL_RELAY_WORK_ENABLED=false` in the source `.env`) and restart Relay to restore its original local stdio driver. The feature remains disabled by default.
+Then disable the experimental flag with `agent-relay install` (or set `EXPERIMENTAL_RELAY_WORK_ENABLED=false` in the source `.env`) and restart Relay to restore its original local stdio driver. The feature remains disabled by default.

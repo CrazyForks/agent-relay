@@ -48,7 +48,7 @@ export class TerminalWizardUI implements WizardUI {
   async text(message: string, options: TextPromptOptions = {}): Promise<string> {
     if (this.closed) throw new WizardCancelledError();
     if (!this.input.isTTY || !this.output.isTTY || typeof this.input.setRawMode !== "function") {
-      throw new Error("Interactive setup requires a terminal (TTY). Run agent-relay init in a terminal.");
+      throw new Error("Interactive setup requires a terminal (TTY). Run agent-relay install in a terminal.");
     }
     if (this.pendingCancel) throw new Error("A setup prompt is already active.");
 

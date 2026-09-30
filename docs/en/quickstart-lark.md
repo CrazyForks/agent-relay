@@ -12,11 +12,11 @@ Install Codex CLI 0.145.0+ separately, sign in yourself, and check `codex --vers
 npx @asuka1127/agent-relay install
 ```
 
-This version is **not published yet**. Use the [equivalent local tarball command](../../README.md#try-this-checkout-now-no-registry-release-needed) now. npm/npx includes Bun. The installer asks before installation and continues directly into configuration; no separate `init` command is needed. Use its printed absolute executable commands, or follow its optional manual `PATH` instructions to use `agent-relay` as shown below.
+This version is **not published yet**. Use the [equivalent local tarball command](../../README.md#try-this-checkout-now-no-registry-release-needed) now. npm/npx includes Bun. `install` is the only installation/configuration entry point. The installer asks before installation and continues directly into configuration. Use its printed absolute executable commands, or follow its optional manual `PATH` instructions to use `agent-relay` as shown below.
 
-Choose Feishu China for [open.feishu.cn/app](https://open.feishu.cn/app), or Lark international for [open.larksuite.com/app](https://open.larksuite.com/app). Credentials and region must match. Sign into the console and create/configure the app yourself; the installer never logs in, creates the app, grants permissions, or publishes it. Use `agent-relay init` to reconfigure later.
+Choose Feishu China for [open.feishu.cn/app](https://open.feishu.cn/app), or Lark international for [open.larksuite.com/app](https://open.larksuite.com/app). Credentials and region must match. Sign into the console and create/configure the app yourself; the installer never logs in, creates the app, grants permissions, or publishes it. Run `agent-relay install` from the installed executable to reconfigure later; it reuses that installation's prefix, including a custom or conventional global prefix.
 
-Source users need Bun 1.3+ and can run `bun install`, `bun run init`, then `bun run cli start`; `.env` + `bun run start` remains available.
+Source users need Bun 1.3+ and can run `bun install`, then follow the [source install workflow](../../README.md#run-from-source-existing-workflow): pack a local tarball and pass it to `bun run cli install --package /absolute/path/asuka1127-agent-relay-0.2.0.tgz`, then run `bun run cli start`. This setup command persists an npm installation and requires Node.js 20+ and npm. `.env` + `bun run start` remains available.
 
 ## 2. Create the app, collect credentials and IDs
 

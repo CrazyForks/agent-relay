@@ -5,7 +5,7 @@ import { dirname, join, resolve, win32 } from "node:path";
 import { gzipSync } from "node:zlib";
 import metadata from "../../package.json";
 import {
-  defaultInstallPrefix, installAndConfigure, installedPaths, launchCommand, npmCommand, shellQuote, validatePackageFile,
+  currentInstallPrefix, defaultInstallPrefix, installAndConfigure, installedPaths, launchCommand, npmCommand, shellQuote, validatePackageFile,
   type InstallOptions, type InstallRunner, type ProcessCommand, type ProcessResult,
 } from "../../src/cli/install.ts";
 import { WizardCancelledError, type Choice, type WizardUI } from "../../src/cli/prompts.ts";
@@ -22,9 +22,9 @@ class InstallUI implements WizardUI {
     if (this.answer instanceof Error) throw this.answer;
     return this.answer;
   }
-  async text(): Promise<string> { throw new Error("The installer must delegate credential prompts to installed init."); }
+  async text(): Promise<string> { throw new Error("The installer must delegate credential prompts to installed setup."); }
   async choose<T extends string>(_message: string, _choices: readonly Choice<T>[]): Promise<T> {
-    throw new Error("The installer must delegate choices to installed init.");
+    throw new Error("The installer must delegate choices to installed setup.");
   }
   close(): void { this.closeCount++; }
   get output(): string { return this.messages.join("\n"); }
@@ -51,7 +51,7 @@ function fixture() {
 
 function createInstalledFixture(prefix: string, version = metadata.version, name = metadata.name): void {
   const paths = installedPaths(prefix);
-  const files = [paths.launcher, paths.executable, join(paths.root, "node_modules", "bun", "bin", "bun.exe")];
+  const files = [paths.launcher, paths.executable, join(paths.root, "src", "cli", "setup.ts"), join(paths.root, "node_modules", "bun", "bin", "bun.exe")];
   for (const file of files) {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, "fixture, not an executable\n");
@@ -60,7 +60,7 @@ function createInstalledFixture(prefix: string, version = metadata.version, name
 }
 
 interface RecordedCall { command: ProcessCommand; env: Env; capture: boolean; }
-function runner(prefix: string, options: { npmCode?: number; initCode?: number; versionCode?: number; versionOutput?: string; omitInstall?: boolean } = {}) {
+function runner(prefix: string, options: { npmCode?: number; setupCode?: number; versionCode?: number; versionOutput?: string; omitInstall?: boolean } = {}) {
   const calls: RecordedCall[] = [];
   const run: InstallRunner = async (command, env, capture = false): Promise<ProcessResult> => {
     calls.push({ command, env, capture });
@@ -70,7 +70,7 @@ function runner(prefix: string, options: { npmCode?: number; initCode?: number; 
       return { code, stdout: "private npm output must not be printed" };
     }
     if (command.args[1] === "--version") return { code: options.versionCode ?? 0, stdout: options.versionOutput ?? `${metadata.version}\n` };
-    if (command.args[1] === "init") return { code: options.initCode ?? 0, stdout: "private init output must not be printed" };
+    if (command.args[2] === join(installedPaths(prefix).root, "src", "cli", "setup.ts")) return { code: options.setupCode ?? 0, stdout: "private setup output must not be printed" };
     throw new Error("Unexpected installer subprocess");
   };
   return { calls, run };
@@ -131,21 +131,21 @@ function writePackage(directory: string, manifest: unknown = { name: metadata.na
 }
 
 describe("persistent install and configure", () => {
-  test("confirms, installs the exact scoped version, verifies it, and starts installed init in order", async () => {
+  test("confirms, installs the exact scoped version, verifies it, and starts installed setup in order", async () => {
     const files = fixture();
     const ui = new InstallUI();
     const processRunner = runner(files.prefix);
     const untouched = writePrivateFiles(files);
     const run: InstallRunner = async (command, env, capture) => {
       if (command.args.includes("--global")) expect(ui.confirmations).toHaveLength(1);
-      if (command.args[1] === "init") expect(ui.closeCount).toBeGreaterThan(0);
+      if (command.args[2] === join(installedPaths(files.prefix).root, "src", "cli", "setup.ts")) expect(ui.closeCount).toBeGreaterThan(0);
       return processRunner.run(command, env, capture);
     };
     expect(await installAndConfigure({ ...installOptions(files, ui, run), envFile: files.envFile })).toBe(0);
     expect(processRunner.calls.map((call) => call.command)).toEqual([
       { command: files.node, args: [files.npmCli, "install", "--global", "--prefix", files.prefix, "--no-audit", "--no-fund", `${metadata.name}@${metadata.version}`] },
       { command: files.node, args: [installedPaths(files.prefix).launcher, "--version"] },
-      { command: files.node, args: [installedPaths(files.prefix).launcher, "init", "--config", files.configPath, "--env-file", files.envFile] },
+      { command: join(installedPaths(files.prefix).root, "node_modules", "bun", "bin", "bun.exe"), args: ["--no-env-file", "--no-install", join(installedPaths(files.prefix).root, "src", "cli", "setup.ts"), "--config", files.configPath, "--env-file", files.envFile] },
     ]);
     expect(processRunner.calls.map((call) => call.capture)).toEqual([false, true, false]);
     expect(ui.confirmations[0]?.defaultValue).toBe(true);
@@ -154,7 +154,7 @@ describe("persistent install and configure", () => {
     expect(ui.output).toContain("Your PATH has not been changed.");
     expect(ui.output).toContain(`Start: ${launchCommand(installedPaths(files.prefix).executable)} start --config ${shellQuote(files.configPath)}`);
     expect(ui.output).not.toContain("private npm output");
-    expect(ui.output).not.toContain("private init output");
+    expect(ui.output).not.toContain("private setup output");
     expect(ui.closeCount).toBeGreaterThan(0);
     untouched();
   });
@@ -166,7 +166,7 @@ describe("persistent install and configure", () => {
     const processRunner = runner(files.prefix);
     const env = { AGENT_RELAY_NODE_PATH: files.node, PATH: dirname(installedPaths(files.prefix).executable) };
     expect(await installAndConfigure({ ...installOptions(files, ui, processRunner.run), env })).toBe(0);
-    expect(processRunner.calls.map((call) => call.command.args[1])).toEqual(["--version", "init"]);
+    expect(processRunner.calls.map((call) => call.command.args[1])).toEqual(["--version", "--no-install"]);
     expect(ui.confirmations).toHaveLength(0);
     expect(ui.output).toContain("already installed");
     expect(ui.output).not.toContain("not on PATH");
@@ -195,6 +195,19 @@ describe("persistent install and configure", () => {
     expect(ui.confirmations).toHaveLength(1);
   });
 
+  test("an earlier same-version copy without the internal wizard is reinstalled before setup", async () => {
+    const files = fixture();
+    createInstalledFixture(files.prefix);
+    rmSync(join(installedPaths(files.prefix).root, "src", "cli", "setup.ts"));
+    const ui = new InstallUI();
+    const processRunner = runner(files.prefix);
+    expect(await installAndConfigure(installOptions(files, ui, processRunner.run))).toBe(0);
+    expect(processRunner.calls[0]?.command.args).toContain("--global");
+    expect(ui.confirmations).toHaveLength(1);
+    expect(processRunner.calls.at(-1)?.command.args).toContain(join(installedPaths(files.prefix).root, "src", "cli", "setup.ts"));
+    expect(processRunner.calls.every(({ command }) => !command.args.includes("init"))).toBe(true);
+  });
+
   for (const brokenCheck of [{ code: 1, stdout: "" }, { code: 0, stdout: "0.0.1\n" }]) {
     test(`repairs matching installed files whose executable fails verification: ${JSON.stringify(brokenCheck)}`, async () => {
       const files = fixture();
@@ -210,7 +223,7 @@ describe("persistent install and configure", () => {
         return result;
       };
       expect(await installAndConfigure(installOptions(files, ui, run))).toBe(0);
-      expect(processRunner.calls.map((call) => call.command.args[1])).toEqual(["--version", "install", "--version", "init"]);
+      expect(processRunner.calls.map((call) => call.command.args[1])).toEqual(["--version", "install", "--version", "--no-install"]);
       expect(processRunner.calls.map((call) => call.capture)).toEqual([true, false, true, false]);
       expect(ui.output).toContain("existing copy failed its version check");
       expect(ui.output).toContain("repair it before configuration");
@@ -236,7 +249,7 @@ describe("persistent install and configure", () => {
     untouched();
   });
 
-  test("failed npm repair never opens init or treats stale matching metadata as success", async () => {
+  test("failed npm repair never opens setup or treats stale matching metadata as success", async () => {
     const files = fixture();
     createInstalledFixture(files.prefix);
     const ui = new InstallUI();
@@ -249,7 +262,7 @@ describe("persistent install and configure", () => {
 
   for (const stage of ["existing", "newly installed"] as const) {
     for (const signalCode of [130, 143]) {
-      test(`${stage} version probe exit ${signalCode} stops without repair or init and preserves files`, async () => {
+      test(`${stage} version probe exit ${signalCode} stops without repair or setup and preserves files`, async () => {
         const files = fixture();
         const untouched = writePrivateFiles(files);
         if (stage === "existing") createInstalledFixture(files.prefix);
@@ -303,29 +316,30 @@ describe("persistent install and configure", () => {
     });
   }
 
-  for (const initCode of [1, 130, 143]) {
-    test(`init exit ${initCode} leaves software installed and does not claim configuration succeeded`, async () => {
+  for (const setupCode of [1, 130, 143]) {
+    test(`setup exit ${setupCode} leaves software installed and does not claim configuration succeeded`, async () => {
       const files = fixture();
       const untouched = writePrivateFiles(files);
       const ui = new InstallUI();
-      const processRunner = runner(files.prefix, { initCode });
-      expect(await installAndConfigure({ ...installOptions(files, ui, processRunner.run), envFile: files.envFile })).toBe(initCode);
+      const processRunner = runner(files.prefix, { setupCode });
+      expect(await installAndConfigure({ ...installOptions(files, ui, processRunner.run), envFile: files.envFile })).toBe(setupCode);
       expect(processRunner.calls).toHaveLength(3);
       expect(existsSync(installedPaths(files.prefix).launcher)).toBe(true);
       expect(existsSync(installedPaths(files.prefix).executable)).toBe(true);
       expect(ui.output).toContain("The software remains installed; configuration did not complete");
-      expect(ui.output).toContain("Run again:");
+      expect(ui.output).toContain(`Run again: ${launchCommand(installedPaths(files.prefix).executable)} install --config ${shellQuote(files.configPath)} --env-file ${shellQuote(files.envFile)}`);
+      expect(ui.output).not.toMatch(/\binit\b/);
       expect(ui.output).not.toContain("Installation and configuration completed");
       untouched();
     });
   }
 
-  test("a cancelled installed init is distinguished from cancelling installation", async () => {
+  test("a cancelled installed setup is distinguished from cancelling installation", async () => {
     const files = fixture();
     const ui = new InstallUI();
     const processRunner = runner(files.prefix);
     const run: InstallRunner = async (command, env, capture) => {
-      if (command.args[1] === "init") throw new WizardCancelledError();
+      if (command.args[2] === join(installedPaths(files.prefix).root, "src", "cli", "setup.ts")) throw new WizardCancelledError();
       return processRunner.run(command, env, capture);
     };
     expect(await installAndConfigure(installOptions(files, ui, run))).toBe(130);
@@ -349,7 +363,7 @@ describe("persistent install and configure", () => {
     untouched();
   });
 
-  test("npm receives no provider secrets or relay settings, while installed init retains explicit environment", async () => {
+  test("npm receives no provider secrets or relay settings, while installed setup retains explicit environment", async () => {
     const files = fixture();
     const ui = new InstallUI();
     const processRunner = runner(files.prefix);
@@ -363,23 +377,23 @@ describe("persistent install and configure", () => {
     const env = Object.freeze({ ...files.env, ...relayEnv, AGENT_RELAY_BUN_PATH: "/untrusted/transient/bun", KEEP_ME: "unrelated-value" });
     const original = { ...env };
     expect(await installAndConfigure({ ...installOptions(files, ui, processRunner.run), env })).toBe(0);
-    const [npm, version, init] = processRunner.calls;
+    const [npm, version, setup] = processRunner.calls;
     for (const [key, value] of Object.entries(relayEnv)) {
       expect(npm?.env[key]).toBeUndefined();
-      expect(init?.env[key]).toBe(value);
+      expect(setup?.env[key]).toBe(value);
       expect(ui.output).not.toContain(value);
       expect(npm?.command.args).not.toContain(value);
-      expect(init?.command.args).not.toContain(value);
+      expect(setup?.command.args).not.toContain(value);
     }
-    for (const call of [npm, version, init]) {
+    for (const call of [npm, version, setup]) {
       expect(call?.env.AGENT_RELAY_BUN_PATH).toBeUndefined();
       expect(call?.env.KEEP_ME).toBe("unrelated-value");
     }
-    expect(init?.env.AGENT_RELAY_INSTALLED_EXECUTABLE).toBe(installedPaths(files.prefix).executable);
+    expect(setup?.env.AGENT_RELAY_INSTALLED_EXECUTABLE).toBe(installedPaths(files.prefix).executable);
     expect(env).toEqual(original);
   });
 
-  test("npm success without a complete persistent package never opens init", async () => {
+  test("npm success without a complete persistent package never opens setup", async () => {
     const files = fixture();
     const ui = new InstallUI();
     const processRunner = runner(files.prefix, { omitInstall: true });
@@ -391,7 +405,7 @@ describe("persistent install and configure", () => {
   });
 
   for (const version of [{ versionCode: 1 }, { versionOutput: "0.0.1\n" }, { versionOutput: `${metadata.version}\nprivate-data` }]) {
-    test(`failed or incorrect version verification never opens init: ${JSON.stringify(version)}`, async () => {
+    test(`failed or incorrect version verification never opens setup: ${JSON.stringify(version)}`, async () => {
       const files = fixture();
       const ui = new InstallUI();
       const processRunner = runner(files.prefix, version);
@@ -428,9 +442,9 @@ describe("local installer tarball", () => {
     expect(processRunner.calls).toHaveLength(3);
     expect(processRunner.calls[0]?.command.args.at(-1)).toBe(resolve(packageFile));
     expect(processRunner.calls[0]?.command.args).not.toContain(`${metadata.name}@${metadata.version}`);
-    const initArgs = processRunner.calls[2]!.command.args;
-    expect(initArgs).toEqual([installedPaths(files.prefix).launcher, "init", "--config", files.configPath]);
-    for (const recursiveArgument of ["install", "--prefix", "--package", packageFile]) expect(initArgs).not.toContain(recursiveArgument);
+    const setupArgs = processRunner.calls[2]!.command.args;
+    expect(setupArgs).toEqual(["--no-env-file", "--no-install", join(installedPaths(files.prefix).root, "src", "cli", "setup.ts"), "--config", files.configPath]);
+    for (const recursiveArgument of ["init", "install", "--prefix", "--package", packageFile]) expect(setupArgs).not.toContain(recursiveArgument);
     expect(ui.confirmations).toHaveLength(1);
   });
 
@@ -499,6 +513,17 @@ describe("local installer tarball", () => {
 });
 
 describe("installer paths and subprocess construction", () => {
+  test("current installation prefix discovery excludes source and temporary npx layouts", () => {
+    const files = fixture();
+    expect(currentInstallPrefix()).toBeUndefined();
+    expect(currentInstallPrefix(installedPaths(files.prefix).root)).toBeUndefined();
+    createInstalledFixture(files.prefix);
+    expect(currentInstallPrefix(installedPaths(files.prefix).root)).toBe(files.prefix);
+    const npxRoot = join(files.directory, "npm cache", "_npx", "random", "node_modules", metadata.name);
+    mkdirSync(npxRoot, { recursive: true });
+    expect(currentInstallPrefix(npxRoot)).toBeUndefined();
+  });
+
   test("the default POSIX prefix uses absolute XDG_DATA_HOME or the user's local share directory", () => {
     expect(defaultInstallPrefix({ XDG_DATA_HOME: "/custom data" }, "/home/alice", "linux")).toBe("/custom data/agent-relay/npm");
     expect(defaultInstallPrefix({}, "/home/alice", "darwin")).toBe("/home/alice/.local/share/agent-relay/npm");

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import metadata from "../../package.json";
 import type { Env } from "../runtime/config-types.ts";
@@ -34,6 +35,14 @@ export function installedPaths(prefix: string, platform: string = process.platfo
   const paths = platform === "win32" ? win32 : { join };
   const root = paths.join(prefix, ...(platform === "win32" ? ["node_modules"] : ["lib", "node_modules"]), metadata.name);
   return { root, launcher: paths.join(root, "bin", "agent-relay.mjs"), executable: paths.join(prefix, ...(platform === "win32" ? ["agent-relay.cmd"] : ["bin", "agent-relay"])) };
+}
+
+/** Discover only a persistent npm layout, not a source tree or an npx cache. */
+export function currentInstallPrefix(packageRoot = fileURLToPath(new URL("../..", import.meta.url)), platform: string = process.platform): string | undefined {
+  const paths = platform === "win32" ? win32 : { resolve, join };
+  const prefix = paths.resolve(packageRoot, platform === "win32" ? "../../.." : "../../../..");
+  const installed = installedPaths(prefix, platform);
+  return paths.resolve(installed.root) === paths.resolve(packageRoot) && existsSync(installed.executable) ? prefix : undefined;
 }
 
 /** Quote a complete executable or argument for the user's POSIX shell / PowerShell. */
@@ -100,12 +109,12 @@ export const runInstallProcess: InstallRunner = (command, env, capture = false) 
   child.once("exit", (code, signal) => finish(code ?? (signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1)));
 });
 
-function matchingInstall(prefix: string): boolean {
+function matchingInstall(prefix: string, runningRuntime?: string): boolean {
   const paths = installedPaths(prefix);
   try {
     const installed = JSON.parse(readFileSync(join(paths.root, "package.json"), "utf8"));
     return installed.name === metadata.name && installed.version === metadata.version
-      && [paths.launcher, paths.executable, join(paths.root, "node_modules", "bun", "bin", "bun.exe")].every(existsSync);
+      && [paths.launcher, paths.executable, join(paths.root, "src", "cli", "setup.ts"), runningRuntime ?? join(paths.root, "node_modules", "bun", "bin", "bun.exe")].every(existsSync);
   } catch { return false; }
 }
 
@@ -114,24 +123,30 @@ export async function installAndConfigure(options: InstallOptions): Promise<numb
     throw new Error("Install and setup require an interactive terminal (TTY). No persistent installation or configuration was changed. Run agent-relay install in a terminal.");
   }
   const env = options.env ?? process.env;
-  const prefix = resolve(options.prefix ?? defaultInstallPrefix(env));
+  const ownPrefix = currentInstallPrefix();
+  const prefix = resolve(options.prefix ?? ownPrefix ?? defaultInstallPrefix(env));
   if (/[\u0000-\u001f\u007f]/.test(prefix)) throw new Error("The installation prefix must not contain control characters.");
   if (existsSync(prefix) && !statSync(prefix).isDirectory()) throw new Error("The installation prefix must be a directory.");
   const packageFile = options.packageFile ? resolve(options.packageFile) : undefined;
   if (packageFile) validatePackageFile(packageFile);
   const paths = installedPaths(prefix);
+  // Reconfiguration may reuse the Bun that already launched this installed copy,
+  // including an explicit external runtime. Fresh installs still verify bundled Bun.
+  const runningRuntime = !packageFile && prefix === ownPrefix ? process.execPath : undefined;
   const node = env.AGENT_RELAY_NODE_PATH || Bun.which("node");
   if (!node) throw new Error("Node.js 20+ was not found. Install Node.js with npm and retry.");
   const run = options.run ?? runInstallProcess;
   const ui = options.ui ?? new TerminalWizardUI();
   const childEnv: Env = { ...env };
   delete childEnv.AGENT_RELAY_BUN_PATH;
+  if (runningRuntime) childEnv.AGENT_RELAY_BUN_PATH = runningRuntime;
   // npm and dependency lifecycle scripts do not need bot credentials or relay settings.
   const npmEnv: Env = { ...childEnv };
+  delete npmEnv.AGENT_RELAY_BUN_PATH;
   for (const key of Object.keys(selectConfigEnv(npmEnv))) delete npmEnv[key];
   let installed = false;
   try {
-    const candidate = !packageFile && matchingInstall(prefix);
+    const candidate = !packageFile && matchingInstall(prefix, runningRuntime);
     const priorCheck = candidate ? await run({ command: node, args: [paths.launcher, "--version"] }, childEnv, true) : undefined;
     if (priorCheck && [130, 143].includes(priorCheck.code)) {
       ui.write("Installation check interrupted. Configuration was not opened or changed."); return priorCheck.code;
@@ -152,7 +167,7 @@ export async function installAndConfigure(options: InstallOptions): Promise<numb
         return result.code;
       }
     }
-    if (!matchingInstall(prefix)) throw new Error("The expected installed package, executable, or bundled Bun is missing. Configuration was not opened; repair the displayed prefix and retry.");
+    if (!matchingInstall(prefix, runningRuntime)) throw new Error("The expected installed package, executable, or bundled Bun is missing. Configuration was not opened; repair the displayed prefix and retry.");
     const check = already ? priorCheck! : await run({ command: node, args: [paths.launcher, "--version"] }, childEnv, true);
     if ([130, 143].includes(check.code)) {
       ui.write("Installation check interrupted. The package files remain in the displayed prefix; configuration was not opened or changed."); return check.code;
@@ -164,12 +179,14 @@ export async function installAndConfigure(options: InstallOptions): Promise<numb
     const onPath = (env.PATH ?? env.Path ?? "").split(delimiter).some((entry) => resolve(entry) === binDirectory);
     if (!onPath) ui.write(`The installation directory is not on PATH. The absolute commands below work immediately. Optionally add ${terminalText(binDirectory)} to your user PATH manually. Your PATH has not been changed.`);
     const command = launchCommand(paths.executable);
-    ui.write(`Opening the installed configuration wizard. If you cancel, the software stays installed and configuration is unchanged.\nRun again: ${command} init --config ${shellQuote(options.configPath)}`);
+    ui.write(`Opening the installed configuration wizard. If you cancel, the software stays installed and configuration is unchanged.\nRun again: ${command} install --config ${shellQuote(options.configPath)}${options.envFile ? ` --env-file ${shellQuote(options.envFile)}` : ""}`);
     // Release raw-input listeners before starting the installed copy. Never recurse into install.
     ui.close?.();
-    const args = [paths.launcher, "init", "--config", options.configPath, ...(options.envFile ? ["--env-file", options.envFile] : [])];
-    const result = await run({ command: node, args }, { ...childEnv, AGENT_RELAY_INSTALLED_EXECUTABLE: paths.executable });
-    ui.write(result.code === 0 ? "Installation and configuration completed." : "The software remains installed; configuration did not complete. Rerun the init command above when ready.");
+    const runtime = runningRuntime ?? join(paths.root, "node_modules", "bun", "bin", "bun.exe");
+    const setup = join(paths.root, "src", "cli", "setup.ts");
+    const args = ["--no-env-file", "--no-install", setup, "--config", options.configPath, ...(options.envFile ? ["--env-file", options.envFile] : [])];
+    const result = await run({ command: runtime, args }, { ...childEnv, AGENT_RELAY_INSTALLED_EXECUTABLE: paths.executable });
+    ui.write(result.code === 0 ? "Installation and configuration completed." : "The software remains installed; configuration did not complete. Rerun the install command above when ready.");
     ui.write(`Check: ${command} doctor --config ${shellQuote(options.configPath)}\nStart: ${command} start --config ${shellQuote(options.configPath)}`);
     return result.code;
   } catch (error) {

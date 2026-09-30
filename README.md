@@ -79,7 +79,7 @@ Once this scoped version is published, run:
 npx @asuka1127/agent-relay install
 ```
 
-This is the combined install-and-configure entry point. It previews the package and destination, asks before installation, installs the running scoped version into a persistent user-owned npm prefix, and immediately opens the installed copy's **English-language configuration wizard**. It does not require a separate `init` command. Repeat runs reuse a matching healthy installed version and reopen configuration; damaged copies are offered a confirmed reinstall; an explicit `--package` reinstalls the supplied tarball.
+`install` is the sole install-and-configure entry point. It previews the package and destination, asks before installation, installs the running scoped version into a persistent user-owned npm prefix, and immediately opens the installed copy's **English-language configuration wizard**. Repeat runs reuse a matching healthy installed version and reopen configuration; damaged copies are offered a confirmed reinstall; an explicit `--package` reinstalls the supplied tarball.
 
 Bot creation and account login remain manual. The wizard guides you to Telegram BotFather or the Feishu/Lark developer console and asks for the credentials and allowlisted IDs you supply. Install and sign into Codex separately. Saving configuration does not start the relay, configure platform-console permissions/events, or install the experimental Gateway launcher.
 
@@ -102,14 +102,16 @@ The first `--package` tells npx where to run the installer from; the second tell
 
 ### Installation location and everyday access
 
-The default npm prefix is outside the checkout and npx cache:
+For a fresh installation, the default npm prefix is outside the checkout and npx cache:
 
 - Linux/macOS: `$XDG_DATA_HOME/agent-relay/npm`, or `~/.local/share/agent-relay/npm`
 - Windows: `%LOCALAPPDATA%\agent-relay\npm`, or `~\AppData\Local\agent-relay\npm`
 
 Pass `install --prefix /absolute/path/to/private/prefix` to choose another user-owned destination. `--config` and `--env-file` are forwarded to the wizard. No administrator privileges are needed for a user-writable prefix. Installation never edits your shell profile or `PATH`; it prints the quoted absolute executable commands you can use immediately. On Unix the executable is `<prefix>/bin/agent-relay`; on Windows it is `<prefix>\agent-relay.cmd`. Follow the printed optional `PATH` instructions if you want to use the shorter `agent-relay` command shown in the rest of this guide.
 
-If configuration is cancelled or fails after npm succeeds, the persistent package remains installed. Use the printed `init` command to resume; existing configuration is unchanged unless you approve saving it.
+When you run `install` from a persistent installation, it detects and reuses that installation's own prefix, including a custom `--prefix` or a conventional npm global prefix. You do not need to repeat `--prefix` when reconfiguring from that executable. An explicit `--prefix` selects a different destination.
+
+If configuration is cancelled or fails after npm succeeds, the persistent package remains installed. Use the printed `install` command to resume; existing configuration is unchanged unless you approve saving it.
 
 The npm path requires Node.js 20+ and npm. It includes the official [`bun@1.3.11`](https://www.npmjs.com/package/bun/v/1.3.11) runtime dependency, its platform binary and non-interactive installer, so **a global Bun install is not required**. Linux/macOS/Windows on x64/arm64 are supported by that runtime; see [Bun system requirements](https://bun.com/docs/installation). The binary adds roughly 100 MB of installed runtime storage. `install` explicitly invokes npm; the normal runtime launcher does not download software. With `--ignore-scripts` or `--omit=optional`, Bun may be missing; reinstall normally or explicitly set `AGENT_RELAY_BUN_PATH` to an existing compatible Bun executable.
 
@@ -117,30 +119,31 @@ If you prefer managing a conventional global npm installation yourself, the foll
 
 ```bash
 npm install -g @asuka1127/agent-relay
-agent-relay init
+agent-relay install
 ```
+
+The second command configures the current global installation; it does not create another copy in the default user-owned prefix.
 
 ### Configuration wizard and everyday commands
 
-The English wizard, opened automatically by `install` or separately with `init`, guides you through Telegram or Feishu/Lark bot setup, credentials, operator/chat allowlists, workspace root, SQLite state, Codex discovery, sandbox/approval defaults, and optional local helpers or experimental Gateway flags. It uses masked secret input and asks before sending credentials to the selected provider's official API. Checks are read-only and cannot prove end-to-end delivery, permissions or publication. It never creates bots, changes webhooks, installs a Gateway proxy, or starts the relay. Finish with `doctor`, then `start` and send `/relay` to your bot.
+The English wizard, opened by `install`, guides you through Telegram or Feishu/Lark bot setup, credentials, operator/chat allowlists, workspace root, SQLite state, Codex discovery, sandbox/approval defaults, and optional local helpers or experimental Gateway flags. It uses masked secret input and asks before sending credentials to the selected provider's official API. Checks are read-only and cannot prove end-to-end delivery, permissions or publication. It never creates bots, changes webhooks, installs a Gateway proxy, or starts the relay. Finish with `doctor`, then `start` and send `/relay` to your bot.
 
 - Telegram: create a bot with [BotFather](https://t.me/BotFather), enter its token and your numeric user ID. Optional validation uses only `getMe` and `getWebhookInfo`; it never consumes `getUpdates` or deletes an existing webhook
 - Feishu/Lark: create a self-built app in the matching developer console, enable Bot capability, and supply App ID/Secret and app-specific `open_id` allowlists. Save and start relay **before** saving long-connection subscriptions in the console. Then configure message events and card callbacks, permissions, publication and app availability using the [detailed guide](docs/en/quickstart-lark.md). Credential validation cannot verify these console steps
-- `agent-relay` or `agent-relay start`: foreground process; with no configuration, an interactive terminal offers the wizard and exits after saving. Run `start` again to connect
-- `agent-relay install`: persist the package and immediately configure it; installation and configuration each require confirmation
-- `agent-relay init`: configure or reconfigure; Ctrl+C/declining save leaves the existing file unchanged
+- `agent-relay` or `agent-relay start`: foreground process; missing configuration exits with instructions to run `install`, without opening the wizard
+- `agent-relay install`: install and configure, or reconfigure the current persistent installation; asks before npm installation and before saving configuration. Ctrl+C/declining save leaves the existing file unchanged
 - `agent-relay doctor`: local configuration, path and Codex version checks; it does not contact a bot API
 - `agent-relay config path`: show the selected file location without displaying secrets
 - `agent-relay gateway <setup|start|stop|status|remove>`: explicit experimental Gateway lifecycle. Use the persistent installation created by `install` (or your own global npm install), rather than an evictable npx cache, for long-lived Gateway use; rerun setup after relocating/upgrading its installation, following the [Gateway guide](docs/en/experimental-relay-work.md)
 
-Configuration lives outside the package and outside the selected workspace: `$XDG_CONFIG_HOME/agent-relay/config.json` or `~/.config/agent-relay/config.json` on Linux/macOS; `%APPDATA%\agent-relay\config.json` on Windows. Override it with `--config /absolute/path/config.json` or `AGENT_RELAY_CONFIG`. `init` creates a private directory (0700) and atomically writes a private file (0600) on POSIX. It refuses shared directories rather than changing their permissions. On Windows, store it in your private profile and protect it with user-only ACLs. The file contains plaintext credentials: never commit or share it.
+Configuration lives outside the package and outside the selected workspace: `$XDG_CONFIG_HOME/agent-relay/config.json` or `~/.config/agent-relay/config.json` on Linux/macOS; `%APPDATA%\agent-relay\config.json` on Windows. Override it with `--config /absolute/path/config.json` or `AGENT_RELAY_CONFIG`. The wizard creates a private directory (0700) and atomically writes a private file (0600) on POSIX. It refuses shared directories rather than changing their permissions. On Windows, store it in your private profile and protect it with user-only ACLs. The file contains plaintext credentials: never commit or share it.
 
-Workspace and SQLite paths saved by `init` are absolute, independent of the launch directory. State defaults to `state/agent-relay.sqlite` beside the config file; the workspace root is your code/projects directory, not the package directory. Shell environment overrides saved settings. The installed CLI does not implicitly load `.env` from the launch directory.
+Workspace and SQLite paths saved by the wizard are absolute, independent of the launch directory. State defaults to `state/agent-relay.sqlite` beside the config file; the workspace root is your code/projects directory, not the package directory. Shell environment overrides saved settings. The installed CLI does not implicitly load `.env` from the launch directory.
 
 To migrate a source-checkout configuration (the original `.env` is left unchanged):
 
 ```bash
-agent-relay init --env-file /absolute/path/to/agent-relay/.env
+agent-relay install --env-file /absolute/path/to/agent-relay/.env
 # Or use that file for one run without creating a saved config:
 agent-relay start --env-file /absolute/path/to/agent-relay/.env
 ```
@@ -153,9 +156,12 @@ Only recognized relay settings are imported. Relative file paths are resolved re
 git clone https://github.com/zwx1127/agent-relay.git
 cd agent-relay
 bun install
-bun run init
+npm pack
+bun run cli install --package /absolute/path/asuka1127-agent-relay-0.2.0.tgz
 bun run cli start
 ```
+
+For this unpublished version, use the tarball name printed by `npm pack` and replace the example path with its actual absolute path. `bun run cli install` uses the same persistent npm installation workflow, so it requires Node.js 20+ and npm and opens the installed copy's wizard; it does not run a separate source-only setup. Both the source CLI and installed CLI can then use the saved private configuration.
 
 The original `.env` workflow also remains supported: copy `.env.example` to `.env`, edit it, and run `bun run start`. Source `bun run start` continues to read the checkout's `.env`; `bun run cli start` uses the new per-user CLI configuration. The source lifecycle scripts `scripts/relay.*` remain checkout-specific and are not installed with the npm package; use the foreground CLI with your preferred process supervisor for an npm installation.
 

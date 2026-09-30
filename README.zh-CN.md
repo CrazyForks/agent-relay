@@ -78,7 +78,7 @@ npm 持久安装后先执行一次 `agent-relay gateway setup`（源码方式使
 npx @asuka1127/agent-relay install
 ```
 
-这是统一的“安装并配置”入口：先预览包版本及安装位置，经确认后将当前 scoped 版本持久安装到用户自己的 npm prefix，再立即启动已安装副本的**英文配置向导**，无需另外运行 `init`。重复运行时会复用已通过运行检查的同版本安装并重新进入配置；损坏的副本会先请求确认再重新安装；显式指定 `--package` 时会重新安装该 tarball。
+`install` 是唯一的“安装并配置”入口：先预览包版本及安装位置，经确认后将当前 scoped 版本持久安装到用户自己的 npm prefix，再立即启动已安装副本的**英文配置向导**。重复运行时会复用已通过运行检查的同版本安装并重新进入配置；损坏的副本会先请求确认再重新安装；显式指定 `--package` 时会重新安装该 tarball。
 
 创建机器人和账号登录仍需手动完成。向导会引导你打开 Telegram BotFather 或飞书/Lark 开发者后台，并填写自己的凭据及操作者 ID。Codex 也需要单独安装并自行登录。保存配置不会启动 relay、替你设置平台权限/事件，或安装实验性 Gateway 代理。
 
@@ -101,14 +101,16 @@ npx --package=/absolute/path/asuka1127-agent-relay-0.2.0.tgz agent-relay install
 
 ### 安装位置与日常使用
 
-默认 npm prefix 独立于源码目录及 npx 缓存：
+首次安装的默认 npm prefix 独立于源码目录及 npx 缓存：
 
 - Linux/macOS：`$XDG_DATA_HOME/agent-relay/npm`，未设置时为 `~/.local/share/agent-relay/npm`
 - Windows：`%LOCALAPPDATA%\agent-relay\npm`，未设置时为 `~\AppData\Local\agent-relay\npm`
 
 通过 `install --prefix /absolute/path/to/private/prefix` 选择其他由自己拥有的安装目录。`--config` 和 `--env-file` 会传给向导。用户可写的 prefix 不需要管理员权限。安装器不会修改 shell 配置或 `PATH`，而是打印可以立即使用的带引号绝对路径命令。Unix 的入口为 `<prefix>/bin/agent-relay`，Windows 为 `<prefix>\agent-relay.cmd`。如需使用下文简写的 `agent-relay` 命令，请按安装器打印的可选说明手动加入 `PATH`。
 
-npm 安装成功后，如果取消配置或保存失败，包仍会保留。使用打印的 `init` 命令重新配置；只有确认保存后才会改写已有配置。
+从持久安装的可执行文件运行 `install` 时，会自动识别并复用该安装自己的 prefix，包括自定义 `--prefix` 和常规 npm 全局安装目录。重新配置时无需再次指定 `--prefix`；显式指定它则会选择其他安装位置。
+
+npm 安装成功后，如果取消配置或保存失败，包仍会保留。使用打印的 `install` 命令重新配置；只有确认保存后才会改写已有配置。
 
 npm 方式需要 Node.js 20+ 和 npm，包含官方 [`bun@1.3.11`](https://www.npmjs.com/package/bun/v/1.3.11) 运行时依赖、对应平台的二进制及非交互安装脚本，**无需预装全局 Bun**。运行时支持 Linux/macOS/Windows 的 x64/arm64，系统限制见 [Bun 安装文档](https://bun.com/docs/installation)。运行时二进制会增加约 100 MB 的安装体积。`install` 会显式调用 npm；正常运行的 relay 启动器不会下载程序。使用 `--ignore-scripts` 或 `--omit=optional` 可能导致 Bun 不可用，此时正常重新安装，或把 `AGENT_RELAY_BUN_PATH` 指向已安装的兼容 Bun 可执行文件。
 
@@ -116,18 +118,19 @@ npm 方式需要 Node.js 20+ 和 npm，包含官方 [`bun@1.3.11`](https://www.n
 
 ```bash
 npm install -g @asuka1127/agent-relay
-agent-relay init
+agent-relay install
 ```
+
+第二条命令会配置当前全局安装，不会在默认用户 prefix 中另建副本。
 
 ### 配置向导与日常命令
 
-`install` 自动打开的英文向导（也可单独通过 `init` 打开）引导配置 Telegram 或飞书/Lark 机器人、凭据、用户/会话白名单、工作区根目录、SQLite 状态文件、Codex 可执行文件、沙箱及审批选项，并可选择启用本地 helper 或实验性 Gateway 开关。Secret 输入会被掩码；只有明确同意后，才会把凭据发送到所选平台的官方 API 做只读检查。检查不能证明消息链路、权限或应用发布已经完成。向导不会自动创建机器人、修改 webhook、安装 Gateway 代理或启动 relay。保存后先运行 `doctor`、再 `start`，向机器人发送 `/relay` 做端到端验证。
+`install` 打开的英文向导引导配置 Telegram 或飞书/Lark 机器人、凭据、用户/会话白名单、工作区根目录、SQLite 状态文件、Codex 可执行文件、沙箱及审批选项，并可选择启用本地 helper 或实验性 Gateway 开关。Secret 输入会被掩码；只有明确同意后，才会把凭据发送到所选平台的官方 API 做只读检查。检查不能证明消息链路、权限或应用发布已经完成。向导不会自动创建机器人、修改 webhook、安装 Gateway 代理或启动 relay。保存后先运行 `doctor`、再 `start`，向机器人发送 `/relay` 做端到端验证。
 
 - Telegram：通过官方 [BotFather](https://t.me/BotFather) 创建机器人，填入 token 和本人数字 user ID。可选检查仅调用 `getMe`、`getWebhookInfo`，不会消费 `getUpdates` 或删除已有 webhook
 - 飞书/Lark：在对应区域的开发者后台创建自建应用，启用机器人能力，填入 App ID/Secret 和该应用专属的 `open_id` 白名单。先保存配置并启动 relay，再在控制台保存长连接消息事件与卡片回调，完成权限、版本发布及可用范围设置，详见[飞书/Lark 指南](docs/en/quickstart-lark.md)。凭据有效不等于这些步骤已完成
-- `agent-relay` 或 `agent-relay start`：以前台方式运行；无配置且有交互终端时，进入首次配置向导，保存后退出，再运行 `start` 才会连接机器人
-- `agent-relay install`：持久安装后立即进入配置；安装和保存配置分别需要确认
-- `agent-relay init`：首次配置或重新配置；Ctrl+C 或拒绝保存不会改写已有文件
+- `agent-relay` 或 `agent-relay start`：以前台方式运行；缺少配置时退出并提示运行 `install`，不会打开向导
+- `agent-relay install`：安装并配置，或重新配置当前持久安装；执行 npm 安装和保存配置前分别需要确认。Ctrl+C 或拒绝保存不会改写已有文件
 - `agent-relay doctor`：检查本地配置、路径和 Codex 版本，不访问机器人 API
 - `agent-relay config path`：仅显示配置文件位置，不显示 secret
 - `agent-relay gateway <setup|start|stop|status|remove>`：显式管理实验性 Gateway。长期运行 Gateway 请使用 `install` 创建的持久安装或自行管理的 npm 全局安装，避免 npx 缓存被清理；移动/升级安装位置后，按 [Gateway 指南](docs/en/experimental-relay-work.md) 重新 setup
@@ -139,7 +142,7 @@ agent-relay init
 从源码方式迁移已有配置（不会改写原 `.env`）：
 
 ```bash
-agent-relay init --env-file /absolute/path/to/agent-relay/.env
+agent-relay install --env-file /absolute/path/to/agent-relay/.env
 # 或只使用该文件启动一次，不写入用户配置：
 agent-relay start --env-file /absolute/path/to/agent-relay/.env
 ```
@@ -152,9 +155,12 @@ agent-relay start --env-file /absolute/path/to/agent-relay/.env
 git clone https://github.com/zwx1127/agent-relay.git
 cd agent-relay
 bun install
-bun run init
+npm pack
+bun run cli install --package /absolute/path/asuka1127-agent-relay-0.2.0.tgz
 bun run cli start
 ```
+
+当前版本尚未发布，请使用 `npm pack` 实际输出的 tarball 文件名，并把示例路径替换为它的真实绝对路径。`bun run cli install` 仍执行持久 npm 安装流程，需要 Node.js 20+ 和 npm，并打开已安装副本的向导，不会运行单独的源码配置入口。之后，源码 CLI 和已安装 CLI 均可使用保存的私有配置。
 
 原 `.env` 工作流仍可用：复制 `.env.example` 为 `.env`，编辑后运行 `bun run start`。源码 `bun run start` 继续读取当前源码目录的 `.env`；`bun run cli start` 则使用新的用户级配置。`scripts/relay.*` 生命周期脚本仍仅服务源码目录，不随 npm 包安装；npm 安装后可将前台 CLI 交给自己的进程管理器。
 
