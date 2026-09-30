@@ -7,10 +7,12 @@ The project is pre-1.0; npm distribution is being prepared and remains unpublish
 ## 0.2.0 (unreleased)
 
 - Add the `@asuka1127/agent-relay` npm package/Node executable and official pinned Bun runtime dependency, with global installation and npx tarball support without global Bun
+- Add one-command `install` to persist the scoped package in a user-owned npm prefix and immediately open the English setup wizard, with explicit installation consent, local tarball support, and no automatic PATH edits
 - Add masked interactive `init`, first-run setup, local `doctor`, explicit config/migration paths, and installed Gateway commands
 - Guide Telegram BotFather and Feishu/Lark self-built app setup with consent-based official-host credential checks, no webhook/queue changes, and clear manual publication/event requirements
 - Store private versioned configuration and state outside package caches/workspaces; preserve the source `.env` workflow and native Codex authority
 - Add focused setup/security tests and a clean packed-artifact npm/npx smoke check; update both README languages and provider guides
+- Standardize project documentation and user-facing text on English, keeping `README.zh-CN.md` as the only Chinese document and preserving old documentation URLs with English redirects
 
 ## Unreleased
 

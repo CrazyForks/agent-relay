@@ -35,7 +35,8 @@ bun run check
 
 Review:
 
-- `README.md`, `README.zh-CN.md`, and quickstart guides still match `.env.example`.
+- `README.md`, `README.zh-CN.md`, and quickstart guides still match the CLI wizard, config options, and source `.env.example`.
+- Documentation and CLI/UI text are English, except `README.zh-CN.md`; legacy `docs/zh-CN/` URLs remain English redirects.
 - `CHANGELOG.md` has a release entry.
 - `SECURITY.md` reflects the current security model.
 - No local runtime files are staged.
@@ -116,7 +117,9 @@ See the README for Telegram and Lark/Feishu setup.
 - [ ] Keep `private: true` until release is approved, then remove it deliberately and publish with the appropriate public scoped access
 - [ ] Run `bun run check` and `npm run test:package` against the final tree
 - [ ] Inspect `npm pack --dry-run --json`: include CLI, helper, all relative runtime/Gateway assets and docs; exclude credentials, .env, SQLite/state, logs, caches, tests and toolchain artifacts
-- [ ] Verify npm/global and npx execution in a clean directory without global Bun; check first-run cancellation and private config persistence outside package/cache
+- [ ] Verify the local tarball `npx ... agent-relay install --package <local.tgz>` flow in a clean directory without global Bun: explicit installation confirmation, persistent prefix, installed-copy wizard, retry/cancellation, no PATH changes, and private config persistence outside package/cache
+- [ ] Verify custom `--prefix`, configuration/migration forwarding, repeated installation, and the exact printed Unix/Windows executable commands
+- [ ] After authorized publication, independently verify `npx @asuka1127/agent-relay install` against the registry before describing the public one-command path as available
 - [ ] Verify Linux/macOS/Windows runtime compatibility on supported x64/arm64 targets before advertising them as tested
 - [ ] Confirm both README files label unpublished examples accurately; only remove the release-status warning after registry publication has been independently verified
 - [ ] Keep npm credentials/OTP entry in the user's trusted login flow; never put registry tokens in Git or chat

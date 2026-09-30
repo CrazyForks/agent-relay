@@ -15,6 +15,7 @@ bun run check
 
 - Keep changes focused on one behavior or documentation topic.
 - Add or update tests for behavior changes.
+- Write code comments, CLI/UI text, tests, and documentation in English. `README.zh-CN.md` is the only maintained Chinese-language document; keep `docs/zh-CN/` as English legacy redirect pages.
 - Run `bun run check` before opening a pull request.
 - Do not commit local runtime files such as `.env`, `.data/`, `logs/`, generated media, or workspace-specific artifacts.
 - Redact bot tokens, allowlisted IDs, private paths, prompts, and assistant output from screenshots or logs.
@@ -38,7 +39,8 @@ Keep public imports pointed at the compatibility barrels unless an implementatio
 Use the bug report issue template and include:
 
 - OS and shell.
-- Bun version.
+- Node.js/npm versions for npm installations, or Bun version for source installations.
+- Installation method and relay version.
 - Codex CLI version, if available.
 - Whether `codex` is available on `PATH`.
 - IM provider: Telegram or Lark/Feishu.

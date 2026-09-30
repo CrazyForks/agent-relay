@@ -36,6 +36,9 @@ try {
   assert(run(executable, ["--version"]).includes(metadata.version));
   assert(run(executable, ["config", "path"]).includes(join("agent-relay", "config.json")));
   assert(run(executable, ["init"], 1).includes("TTY"));
+  const nonTtyPrefix = join(root, "non-tty-prefix");
+  assert(run(executable, ["install", "--prefix", nonTtyPrefix], 1).includes("TTY"));
+  assert(!existsSync(nonTtyPrefix), "Non-TTY install created a prefix");
   assert(run(executable, ["start"], 1).includes("TTY"));
   assert(!existsSync(join(home, ".config/agent-relay/config.json")), "Non-TTY setup wrote config");
   writeFileSync(join(cwd, ".env"), "TELEGRAM_BOT_TOKEN=SHOULD_NOT_LOAD\nALLOWED_USER_IDS=SHOULD_NOT_LOAD\n");
@@ -70,6 +73,11 @@ try {
   if (process.platform !== "win32") {
     assert(run(npx, ["--yes", `--package=${tarball}`, "agent-relay", "doctor", "--config", config], 0, { env: { ...env, npm_config_cache: join(root, "npx-cache") } }).includes("0.159.2"));
     assert(JSON.parse(readFileSync(config, "utf8")).env.TELEGRAM_BOT_TOKEN === "123456:fake-package-smoke-token");
+  }
+  if (process.platform !== "win32") {
+    const interactive = run(runtime, ["--no-env-file", "--no-install", join(repo, "scripts/install-package-smoke.ts"), tarball, root], 0, { timeout: 300_000 });
+    assert(interactive.includes("Interactive package smoke passed"));
+    console.log(interactive.trim());
   }
   console.log(`Package smoke passed: ${metadata.name}@${metadata.version}, ${files.length} allowlisted files, npm global and npx tarball outside checkout without global Bun. Config and source secrets excluded.`);
 } finally { rmSync(root, { recursive: true, force: true }); }

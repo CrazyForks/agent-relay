@@ -18,7 +18,7 @@ if (check.error || check.status !== 0 || !version || Number(version[1]) < 1 || (
   const entry = fileURLToPath(new URL("../src/cli/main.ts", import.meta.url));
   const child = spawn(runtime, ["--no-env-file", "--no-install", entry, ...process.argv.slice(2)], {
     stdio: "inherit", windowsHide: false,
-    env: { ...process.env, AGENT_RELAY_BUN_PATH: runtime },
+    env: { ...process.env, AGENT_RELAY_BUN_PATH: runtime, AGENT_RELAY_NODE_PATH: process.execPath },
   });
   const interrupt = () => { if (!child.killed) child.kill("SIGINT"); };
   const terminate = () => { if (!child.killed) child.kill("SIGTERM"); };

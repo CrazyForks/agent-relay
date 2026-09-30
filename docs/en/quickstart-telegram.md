@@ -4,14 +4,19 @@ Use this guide when you want to control local Codex from Telegram.
 
 ## 1. Install and prepare local tools
 
-Follow [npm/npx installation](../../README.md#install-with-npm--npx), including the unpublished-release warning and tarball option. npm/npx includes the official Bun runtime; source users need Bun 1.3+. Install Codex CLI 0.145.0+ separately and sign in on this trusted machine. Git is needed for normal code/version-control work.
+Install Codex CLI 0.145.0+ separately and sign in yourself on this trusted machine. Git is needed for normal code/version-control work. Check `codex --version` before starting relay.
+
+**After npm publication**, one command installs a persistent copy and opens the English configuration wizard:
 
 ```bash
-codex --version
-agent-relay init
+npx @asuka1127/agent-relay install
 ```
 
-For a source checkout, run `bun run init`, then `bun run cli start`; the original `.env` + `bun run start` flow is also supported.
+This version is **not published yet**. Use the [equivalent local tarball command](../../README.md#try-this-checkout-now-no-registry-release-needed) now. npm/npx includes the official Bun runtime. The installer asks before installing, then continues directly into the wizard; no separate `init` command is needed.
+
+Use the absolute executable commands printed at the end, or follow its optional manual `PATH` instructions to use `agent-relay` as shown below. To reconfigure an existing installation, use `agent-relay init`. The installer does not create the bot or sign you into Telegram or Codex.
+
+For a source checkout, install Bun 1.3+, run `bun install` and `bun run init`, then `bun run cli start`; the original `.env` + `bun run start` flow is also supported.
 
 ## 2. Create a bot and configure the wizard
 

@@ -8,7 +8,7 @@ Relay work lets the native Codex CLI, supported Codex Desktop apps, and IM-based
 
 ## Setup and manual lifecycle
 
-Add the experimental gate to `.env`:
+For an npm installation, use `agent-relay init` to enable the experimental Gateway flag in your private configuration. For the original source `.env` workflow, add:
 
 ```dotenv
 EXPERIMENTAL_RELAY_WORK_ENABLED=true
@@ -17,9 +17,29 @@ EXPERIMENTAL_RELAY_GATEWAY_PORT=18765
 # EXPERIMENTAL_RELAY_GATEWAY_STATE_PATH=/absolute/path/to/gateway-state.json
 ```
 
-Gateway runtime state, logs, launcher configuration, and installation records default to `~/.agent-relay/experimental-relay-work/`. Relay's repository-local `.data` and `logs` directories are independent. Relay restart clears those repository-local directories so sessions, tasks, prompts, UI state, and transcripts start fresh; it never deletes Gateway data or Codex thread history, which remain available through `/resume`.
+Gateway runtime state, logs, launcher configuration, and installation records default to `~/.agent-relay/experimental-relay-work/`. Relay's state is independent. The source lifecycle scripts clear repository-local `.data` and `logs` on Relay restart so sessions, tasks, prompts, UI state, and transcripts start fresh; they never delete Gateway data or Codex thread history, which remain available through `/resume`. The npm CLI uses the SQLite state path in its private configuration and does not use the source lifecycle scripts.
 
-Run setup once. Setup installs the permanent Codex launcher and client environment, initializes durable `local` mode, and does **not** start Gateway:
+### npm installation
+
+Use the persistent copy created by [`install`](../../README.md#install-with-npm--npx), or a conventional global npm installation. Do not set up a long-lived Gateway from an evictable npx cache. The commands below assume the installed binary is on PATH; otherwise use its printed absolute executable path. Run setup once:
+
+```bash
+agent-relay gateway setup
+```
+
+Setup installs the permanent Codex launcher and client environment, initializes durable `local` mode, and does **not** start Gateway. Open a new terminal afterward; on Windows and macOS, also restart Codex Desktop. Start Relay in one terminal, then start Gateway explicitly in another:
+
+```bash
+agent-relay start
+# In another terminal:
+agent-relay gateway start
+```
+
+If the package is relocated or upgraded, stop Gateway, rerun `agent-relay gateway setup` from the current persistent installation, then restart Gateway and native clients. Keep the package and its bundled runtime available while the launcher is installed.
+
+### Source checkout
+
+Run setup once from the checkout. It has the same explicit launcher and client-environment effects:
 
 ```powershell
 .\scripts\gateway.ps1 setup
@@ -51,7 +71,7 @@ gateway status   report setup, mode, PIDs, health, URL, state, and launcher
 gateway remove   select local, stop, restore the client environment, remove data
 ```
 
-Use `bun run gateway <command>` as the package-level equivalent. There are no `gateway-install`, `clients-enable`, `desktop-enable`, or matching disable compatibility aliases.
+For npm installations, use `agent-relay gateway <command>`. For source checkouts, use `bun run gateway <command>` as the script equivalent. There are no `gateway-install`, `clients-enable`, `desktop-enable`, or matching disable compatibility aliases.
 
 ## Client integration by platform
 
@@ -111,7 +131,13 @@ There is no progress-history database, consumption cursor, semantic JSON journal
 
 ## Stop or remove
 
-Temporarily return new Codex processes to normal local behavior while keeping setup:
+Temporarily return new Codex processes to normal local behavior while keeping setup. For npm installations:
+
+```bash
+agent-relay gateway stop
+```
+
+For source checkouts:
 
 ```powershell
 .\scripts\gateway.ps1 stop
@@ -121,7 +147,13 @@ Temporarily return new Codex processes to normal local behavior while keeping se
 ./scripts/gateway.sh stop
 ```
 
-Remove the launcher, restore the previous Windows/macOS environment or remove the managed Linux shell fragment, and delete Gateway user data:
+Remove the launcher, restore the previous Windows/macOS environment or remove the managed Linux shell fragment, and delete Gateway user data. For npm installations:
+
+```bash
+agent-relay gateway remove
+```
+
+For source checkouts:
 
 ```powershell
 .\scripts\gateway.ps1 remove
@@ -131,4 +163,4 @@ Remove the launcher, restore the previous Windows/macOS environment or remove th
 ./scripts/gateway.sh remove
 ```
 
-Then set `EXPERIMENTAL_RELAY_WORK_ENABLED=false` and restart Relay to restore its original local stdio driver. The feature remains disabled by default.
+Then disable the experimental flag with `agent-relay init` (or set `EXPERIMENTAL_RELAY_WORK_ENABLED=false` in the source `.env`) and restart Relay to restore its original local stdio driver. The feature remains disabled by default.

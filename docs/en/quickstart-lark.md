@@ -4,14 +4,19 @@ Use an enterprise self-built app with a Bot capability, not a group webhook-only
 
 ## 1. Install and select the region
 
-Follow [npm/npx installation](../../README.md#install-with-npm--npx), including the unpublished-release warning and tarball option. npm/npx includes Bun; source users need Bun 1.3+. Install/sign in to Codex CLI 0.145.0+ separately.
+Install Codex CLI 0.145.0+ separately, sign in yourself, and check `codex --version` on the trusted machine that will run relay.
+
+**After npm publication**, one command installs a persistent copy and opens the English configuration wizard:
 
 ```bash
-codex --version
-agent-relay init
+npx @asuka1127/agent-relay install
 ```
 
-Choose Feishu China for [open.feishu.cn/app](https://open.feishu.cn/app), or Lark international for [open.larksuite.com/app](https://open.larksuite.com/app). Credentials and region must match. Source users can run `bun run init` / `bun run cli start`; `.env` + `bun run start` remains available.
+This version is **not published yet**. Use the [equivalent local tarball command](../../README.md#try-this-checkout-now-no-registry-release-needed) now. npm/npx includes Bun. The installer asks before installation and continues directly into configuration; no separate `init` command is needed. Use its printed absolute executable commands, or follow its optional manual `PATH` instructions to use `agent-relay` as shown below.
+
+Choose Feishu China for [open.feishu.cn/app](https://open.feishu.cn/app), or Lark international for [open.larksuite.com/app](https://open.larksuite.com/app). Credentials and region must match. Sign into the console and create/configure the app yourself; the installer never logs in, creates the app, grants permissions, or publishes it. Use `agent-relay init` to reconfigure later.
+
+Source users need Bun 1.3+ and can run `bun install`, `bun run init`, then `bun run cli start`; `.env` + `bun run start` remains available.
 
 ## 2. Create the app, collect credentials and IDs
 

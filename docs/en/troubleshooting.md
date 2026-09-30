@@ -2,17 +2,41 @@
 
 This page covers the most common setup problems. Do not share bot tokens, app secrets, private paths, prompts, or assistant output in public issues.
 
+## Installation or the setup wizard fails
+
+Use the scoped package `@asuka1127/agent-relay`. The unscoped `agent-relay` package belongs to another project. This version is not published yet; use the [local tarball workflow](../../README.md#try-this-checkout-now-no-registry-release-needed) until publication has been verified.
+
+`install` needs Node.js 20+, npm, network access for dependencies, and an interactive terminal for its English configuration wizard. It installs into a persistent user-owned npm prefix, then opens the wizard. Plain `npm install -g` only installs the package; use `agent-relay init` afterward if you choose that alternative.
+
+- If `agent-relay` is not found, use the exact executable path printed by `install`, or add its printed binary directory to your shell's `PATH`. Installation does not edit shell startup files
+- If setup was cancelled or could not save, the package may already be installed. Run its printed `init` command to retry configuration
+- If Bun is missing after installation with `--ignore-scripts` or `--omit=optional`, reinstall normally or point `AGENT_RELAY_BUN_PATH` at an existing compatible Bun executable
+- A non-interactive terminal cannot run the wizard. Configure in an interactive terminal first, then provide `--config` or `--env-file` for automated runs
+- If saving reports an unsafe config directory, choose a private directory you own. Do not weaken the permissions check or put credentials in a shared directory
+
+The wizard never creates Telegram bots or Feishu/Lark apps, signs you into accounts, or finishes provider-console configuration. Those steps remain manual; see the [Telegram](quickstart-telegram.md) and [Feishu/Lark](quickstart-lark.md) guides.
+
 ## The relay does not start
+
+For an installed package, run these commands using `agent-relay` on `PATH` or the executable path printed by `install`:
+
+```bash
+agent-relay config path
+agent-relay doctor
+agent-relay start
+```
 
 Check:
 
-- `.env` exists.
-- `WORKSPACE_ROOT` is an absolute path.
-- `ALLOWED_USER_IDS` is set.
-- Provider credentials are set.
-- `codex --version` works.
+- The selected private config exists and contains the intended provider credentials and `ALLOWED_USER_IDS`
+- `WORKSPACE_ROOT` and the SQLite state path are absolute, and their locations are usable
+- `codex --version` works, and you have signed into Codex separately on this machine
+- If you configured with `--config` or `--env-file`, you pass the same option when starting
+- Shell environment variables are not unexpectedly overriding saved settings
 
-Run:
+The installed CLI does not implicitly read `.env` from the launch directory. Use `agent-relay start --env-file /absolute/path/.env` for an explicit legacy file. `doctor` checks local configuration and tools, not authentication or bot delivery.
+
+For the original source workflow, ensure the checkout's `.env` exists, then run:
 
 ```bash
 bun run typecheck
@@ -63,7 +87,7 @@ Check:
 - If there is no `router.message_received` or `router.group_message_ignored` log entry after sending a group message, Telegram did not deliver that update to the bot. Check the command format, bot privacy mode, and group permissions.
 - For multi-agent groups, each bot has its own relay process and its own credentials.
 
-Telegram Privacy Mode is a server-side filter. With Privacy Mode enabled, Telegram only sends a bot messages that it considers relevant, so a normal group message or a mention-first message such as `@relay_bot /relay` may never reach agent-relay. Use Telegram's native bot command form `/relay@relay_bot` when you need the command to target one bot reliably. The relay also accepts `/relay @relay_bot` if Telegram delivers the update. To receive normal group text that only mentions the bot, disable Privacy Mode in BotFather and re-add the bot to the group, or make the bot a group administrator. See Telegram's official Privacy Mode docs: https://core.telegram.org/bots/features#privacy-mode
+Telegram Privacy Mode is a server-side filter. With Privacy Mode enabled, Telegram only sends a bot messages that it considers relevant, so a normal group message or a mention-first message such as `@relay_bot /relay` may never reach agent-relay. Use Telegram's native bot command form `/relay@relay_bot` when you need the command to target one bot reliably. The relay also accepts `/relay @relay_bot` if Telegram delivers the update. If you need normal group text and media mentions, deliberately disable Privacy Mode in BotFather and re-add the bot. Telegram will then deliver all group messages to the bot, although relay ignores unmentioned traffic. Do not grant group administrator privileges merely to bypass this filter. See [Telegram Privacy Mode](https://core.telegram.org/bots/features#privacy-mode).
 
 ## Topic or thread routing looks wrong
 
@@ -116,8 +140,9 @@ Check:
 Include:
 
 - OS and shell.
-- Bun version.
+- Node.js/npm versions for npm installations, or Bun version for source installations.
+- Installation method and relay version.
 - Codex CLI version.
 - IM provider: Telegram or Lark/Feishu.
-- Redacted `.env` variable names.
+- Configuration variable names only, with values removed; do not attach the config or `.env` file.
 - Redacted logs around the failure.

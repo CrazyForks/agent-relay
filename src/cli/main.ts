@@ -7,34 +7,42 @@ import { codexVersionSpawnCommand, parseCodexVersion, isCodexVersionSupported } 
 import { loadConfig, type Env } from "../runtime/config.ts";
 import { absoluteConfigPaths, defaultConfigPath, importEnvFile, mergeConfigEnv, readConfigFile, requireAbsoluteState, writeConfigFile } from "./config-file.ts";
 import { runWizard } from "./wizard.ts";
+import { installAndConfigure, launchCommand, shellQuote } from "./install.ts";
 
-export interface CliArgs { command: string; subcommand?: string; configPath: string; envFile?: string; }
+export interface CliArgs { command: string; subcommand?: string; configPath: string; envFile?: string; prefix?: string; packageFile?: string; }
 export function parseArgs(args: string[], env: Env = process.env): CliArgs {
   let configPath = defaultConfigPath(env);
   let envFile: string | undefined;
+  let prefix: string | undefined;
+  let packageFile: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === "--config" || arg === "--env-file") {
+    if (arg === "--config" || arg === "--env-file" || arg === "--prefix" || arg === "--package") {
       const value = args[++i];
       if (!value || value.startsWith("--")) throw new Error(`${arg} requires a path.`);
-      if (arg === "--config") configPath = resolve(value); else envFile = resolve(value);
+      if (arg === "--config") configPath = resolve(value);
+      else if (arg === "--env-file") envFile = resolve(value);
+      else if (arg === "--prefix") prefix = resolve(value);
+      else packageFile = resolve(value);
     } else if (arg === "--help" || arg === "-h") return { command: "help", configPath };
     else if (arg === "--version" || arg === "-v") return { command: "version", configPath };
     else if (arg.startsWith("-")) throw new Error("Unknown option. Run agent-relay --help; credentials must never be passed as command-line arguments.");
     else positional.push(arg);
   }
   const command = positional[0] || "start";
-  if (!["init", "start", "doctor", "config", "gateway", "help", "version"].includes(command)) throw new Error("Unknown command. Run agent-relay --help.");
+  if (!["install", "init", "start", "doctor", "config", "gateway", "help", "version"].includes(command)) throw new Error("Unknown command. Run agent-relay --help.");
   if (positional.length > (command === "config" || command === "gateway" ? 2 : 1)) throw new Error("Too many arguments. Run agent-relay --help.");
   if (command === "config" && positional[1] !== "path") throw new Error("usage: agent-relay config path");
   if (command === "gateway" && !["setup", "start", "stop", "status", "remove"].includes(positional[1] || "status")) throw new Error("usage: agent-relay gateway <setup|start|stop|status|remove>");
-  return { command, subcommand: positional[1], configPath, envFile };
+  if ((prefix || packageFile) && command !== "install") throw new Error("--prefix and --package are only valid with install.");
+  return { command, subcommand: positional[1], configPath, envFile, ...(prefix ? { prefix } : {}), ...(packageFile ? { packageFile } : {}) };
 }
 
 const HELP = `${metadata.name} ${metadata.version}
 Usage: agent-relay [command] [--config <file>] [--env-file <file>]
 
+  install        Persistent per-user npm installation, then guided configuration
   init           Interactive private configuration + Telegram/Feishu/Lark guidance
   start          Start in foreground (default); first run offers setup in a TTY
   doctor         Check local configuration, paths, Bun and Codex; no bot network calls
@@ -43,6 +51,9 @@ Usage: agent-relay [command] [--config <file>] [--env-file <file>]
   --help         Show this help
   --version      Show package version
 
+Install options: --prefix <directory> and --package <local.tgz> (same name/version).
+install requires a TTY and confirmation before installing; it never edits PATH.
+The default install prefix is per-user; absolute launch commands are printed.
 init does not start the relay. --env-file imports existing .env settings into init,
 or uses them for one start/doctor invocation. Implicit cwd .env files are ignored by
 this CLI. Existing source-checkout 'bun run start' keeps its .env behavior.
@@ -68,7 +79,8 @@ async function initialize(parsed: CliArgs, initial: Env): Promise<void> {
   writeConfigFile(parsed.configPath, result);
   console.log(`Saved private configuration: ${parsed.configPath}`);
   if (process.platform === "win32") console.log("Keep this file in your private Windows profile; POSIX chmod does not enforce Windows ACLs.");
-  console.log("Run agent-relay doctor, then agent-relay start with the same --config path (or AGENT_RELAY_CONFIG). Setup does not start a bot or a Gateway.");
+  const command = process.env.AGENT_RELAY_INSTALLED_EXECUTABLE ? launchCommand(process.env.AGENT_RELAY_INSTALLED_EXECUTABLE) : "agent-relay";
+  console.log(`Run ${command} doctor --config ${shellQuote(parsed.configPath)}, then ${command} start --config ${shellQuote(parsed.configPath)}. Setup does not start a bot or a Gateway.`);
 }
 
 async function doctor(env: Env, configPath: string): Promise<void> {
@@ -104,6 +116,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   const saved = parsed.envFile ? importEnvFile(parsed.envFile) : readConfigFile(parsed.configPath);
   const initial = requireAbsoluteState(mergeConfigEnv(saved ?? {}, process.env), parsed.configPath);
   try {
+    if (parsed.command === "install") { process.exitCode = await installAndConfigure(parsed); return; }
     if (parsed.command === "init") return await initialize(parsed, initial);
     if (parsed.command === "gateway") {
       const entry = fileURLToPath(new URL("../gateway/manage.ts", import.meta.url));
