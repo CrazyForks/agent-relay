@@ -212,6 +212,8 @@ export interface AgentUserInputRequestEvent {
   requestId: string | number;
   threadId?: string;
   questions: AgentUserInputQuestion[];
+  /** Missing means blocking for compatibility with older providers. */
+  isBlocking?: boolean;
   turnId?: string;
   itemId?: string;
 }
@@ -231,6 +233,10 @@ export interface AgentApprovalRequestEvent {
   /** Raw provider method name, retained so adapters can support new approval methods before a type is added. */
   method: string;
   approvalKind: AgentApprovalKind;
+  /** Native callback identity; multiple callbacks can belong to one item. */
+  approvalId?: string;
+  /** Native command action, distinct from the provider-neutral approval category. */
+  commandExecutionKind?: "command" | "writeStdin";
   title: string;
   body: string;
   params: unknown;

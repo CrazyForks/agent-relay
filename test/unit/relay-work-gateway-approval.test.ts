@@ -74,7 +74,7 @@ describe("experimental relay work Gateway approval arbitration", () => {
     const first = {
       id: 7,
       method: "item/commandExecution/requestApproval",
-      params: { threadId: "thread-1", turnId: "turn-1", itemId: "command-1", command: "bun test" },
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "command-1", approvalId: "approval-1", command: "bun test" },
     };
 
     expect(shareServerRequest(desktop, first, desktopBackend, clients, pending, relayed)).toEqual({
@@ -88,11 +88,10 @@ describe("experimental relay work Gateway approval arbitration", () => {
     expect(shareServerRequest(relay, {
       ...first,
       id: 19,
-      params: { ...first.params, command: "changed command" },
     }, relayBackend, clients, pending, relayed)).toEqual({
       kind: "coalesced",
       deliverToOrigin: false,
-      conflict: true,
+      conflict: false,
     });
     expect(relayMessages).toHaveLength(1);
 
@@ -117,7 +116,11 @@ describe("experimental relay work Gateway approval arbitration", () => {
   test("shares only approval and user-input server request methods", () => {
     expect(isShareableServerRequest("item/fileChange/requestApproval")).toBe(true);
     expect(isShareableServerRequest("item/tool/requestUserInput")).toBe(true);
-    expect(isShareableServerRequest("mcpServer/elicitation/request")).toBe(true);
+    expect(isShareableServerRequest("mcpServer/elicitation/request", { mode: "form" })).toBe(true);
+    expect(isShareableServerRequest("mcpServer/elicitation/request", { mode: "url" })).toBe(true);
+    for (const mode of ["openai/form", "openaiForm", "openai/userVerification", "futureMode", undefined]) {
+      expect(isShareableServerRequest("mcpServer/elicitation/request", { mode })).toBe(false);
+    }
     expect(isShareableServerRequest("account/login/completed")).toBe(false);
   });
 
@@ -250,5 +253,232 @@ describe("experimental relay work Gateway approval arbitration", () => {
     expect(client.threads.has("thread-1")).toBe(true);
     updateClientFromBackend(client, { id: 3, result: { status: "unsubscribed" } });
     expect(client.threads.has("thread-1")).toBe(false);
+  });
+});
+
+function callbackFixture() {
+  const makeClient = (id: string) => {
+    const sent: Record<string, unknown>[] = [];
+    const replies: Record<string, unknown>[] = [];
+    const backend = { readyState: WebSocket.OPEN as number, send: (raw: string) => replies.push(JSON.parse(raw)) };
+    const client = {
+      data: { id, connectedAt: 1, backend, relayInstanceId: `instance-${id}`, queued: [], threads: new Set(["thread-1"]), deliveredSeq: new Map() },
+      socket: { send: (raw: string) => sent.push(JSON.parse(raw)) },
+    } as unknown as ConnectedClient;
+    return { client, backend, sent, replies };
+  };
+  const origin = makeClient("native");
+  const peer = makeClient("relay");
+  const clients = new Map([[origin.client.data.id, origin.client], [peer.client.data.id, peer.client]]);
+  const pending = new Map<string, PendingServerRequest>();
+  const relayed = new Map<string, string>();
+  const share = (message: { id: string | number; method: string; params: Record<string, unknown> }, target = origin) =>
+    shareServerRequest(target.client, message, target.backend as unknown as WebSocket, clients, pending, relayed);
+  const answer = (id: string | number, result: unknown = { decision: "accept" }, target = peer) =>
+    routeServerRequestResponse(target.client.data, { id, result }, "", clients, pending, relayed);
+  return { origin, peer, clients, pending, relayed, share, answer };
+}
+
+function approval(id: string | number, approvalId: string | null = "approval-a", kind = "command") {
+  return {
+    id,
+    method: "item/commandExecution/requestApproval",
+    params: { threadId: "thread-1", turnId: "turn-1", itemId: "shared-item", approvalId, kind, command: "bun test" },
+  };
+}
+
+describe("Codex 0.159.2 Gateway callback identity", () => {
+  test.each([false, true])("keeps a different approvalId unanswered when first resolved=%s", (resolved) => {
+    const f = callbackFixture();
+    f.share(approval(10));
+    const firstAlias = f.peer.sent[0]!.id as string;
+    if (resolved) f.answer(firstAlias);
+    expect(f.share(approval(11, "approval-b"))).toMatchObject({ kind: "created", conflict: false, deliverToOrigin: true });
+    const secondAlias = f.peer.sent.find((message) => message.method === "item/commandExecution/requestApproval" && message.id !== firstAlias)!.id as string;
+    if (!resolved) f.answer(firstAlias);
+    expect(f.origin.replies).toEqual([{ id: 10, result: { decision: "accept" } }]);
+    expect([...f.pending.values()].find((pending) => pending.origins.has("native:number:11"))?.resolved).toBe(false);
+    f.answer(secondAlias, { decision: "decline" });
+    expect(f.origin.replies.at(-1)).toEqual({ id: 11, result: { decision: "decline" } });
+  });
+
+  test("separates command, writeStdin, and unknown callback kinds", () => {
+    const f = callbackFixture();
+    f.share(approval(1));
+    f.share(approval(2, "approval-a", "writeStdin"));
+    f.share(approval(3, "approval-a", "futureKind"));
+    expect(f.pending.size).toBe(3);
+    f.answer(f.peer.sent[0]!.id as string);
+    expect(f.origin.replies.map((response) => response.id)).toEqual([1]);
+    expect([...f.pending.values()].filter((request) => !request.resolved)).toHaveLength(2);
+  });
+
+  test.each([false, true])("fails closed on changed native callback payload when first resolved=%s", (resolved) => {
+    const f = callbackFixture();
+    const first = approval(1);
+    f.share(first);
+    const original = [...f.pending.values()][0]!;
+    if (resolved) f.answer(f.peer.sent[0]!.id as string);
+    const changed = { ...first, id: 2, params: { ...first.params, command: "rm -rf important" } };
+    expect(f.share(changed, f.peer)).toMatchObject({ conflict: true, deliverToOrigin: false });
+    expect(f.pending.size).toBe(1);
+    expect(original.origins.size).toBe(1);
+    expect(f.peer.replies).toEqual([{ id: 2, error: expect.objectContaining({ code: -32602 }) }]);
+    if (!resolved) f.answer(f.peer.sent[0]!.id as string);
+    expect(f.origin.replies).toEqual([{ id: 1, result: { decision: "accept" } }]);
+    expect(f.share({ ...first, id: 3 }, f.peer).conflict).toBe(false);
+    expect(f.peer.replies.at(-1)).toEqual({ id: 3, result: { decision: "accept" } });
+    expect([...f.pending.values()][0]).toBe(original);
+  });
+
+  test.each([false, true])("does not replay a changed exact transport callback when first resolved=%s", (resolved) => {
+    const f = callbackFixture();
+    const first = approval(1);
+    f.share(first);
+    if (resolved) f.answer(f.peer.sent[0]!.id as string);
+    expect(f.share({ ...first, params: { ...first.params, command: "changed" } })).toMatchObject({ kind: "duplicate", conflict: true });
+    expect(f.origin.replies.at(-1)).toMatchObject({ id: 1, error: { code: -32602 } });
+    f.answer(f.peer.sent[0]!.id as string);
+    expect(f.origin.replies.filter((reply) => "result" in reply)).toHaveLength(resolved ? 1 : 0);
+    expect([...f.pending.values()][0]!.response).toEqual(resolved ? { result: { decision: "accept" } } : undefined);
+    if (!resolved) {
+      expect([...f.pending.values()][0]!.resolved).toBe(false);
+      expect([...f.pending.values()][0]!.conflicted).toBe(true);
+      expect(f.peer.sent.filter((message) => message.method === "serverRequest/resolved")).toEqual([]);
+      handleServerRequestResolved(f.origin.client.data, { method: "serverRequest/resolved", params: { threadId: "thread-1", requestId: 1 } }, f.clients, f.pending, f.relayed);
+      expect([...f.pending.values()][0]!.resolved).toBe(true);
+    }
+  });
+
+  test("disambiguates legacy missing/null IDs with typed native RPC IDs", () => {
+    const f = callbackFixture();
+    const missing = approval(1, null);
+    const { approvalId: _unused, ...params } = missing.params;
+    f.share({ ...missing, params });
+    f.share(approval(2, null));
+    f.share(approval("2", null));
+    expect(f.pending.size).toBe(3);
+    f.answer(f.peer.sent[0]!.id as string);
+    expect(f.origin.replies).toEqual([{ id: 1, result: { decision: "accept" } }]);
+    // The SAME legacy RPC callback on another native connection still coalesces.
+    expect(f.share({ ...missing, params }, f.peer)).toMatchObject({ kind: "coalesced", conflict: false });
+    expect(f.peer.replies).toEqual([{ id: 1, result: { decision: "accept" } }]);
+  });
+
+  test.each([false, true])("quarantines the same global legacy RPC ID with changed payload across connections when resolved=%s", (resolved) => {
+    const f = callbackFixture();
+    const first = approval(1, null);
+    f.share(first);
+    if (resolved) f.answer(f.peer.sent[0]!.id as string);
+    expect(f.share({ ...first, params: { ...first.params, command: "changed" } }, f.peer).conflict).toBe(true);
+    expect(f.pending.size).toBe(1);
+    expect(f.peer.replies).toEqual([{ id: 1, error: expect.objectContaining({ code: -32602 }) }]);
+    f.answer(f.peer.sent[0]!.id as string);
+    expect(f.origin.replies).toHaveLength(resolved ? 1 : 0);
+    expect([...f.pending.values()][0]!.response).toEqual(resolved ? { result: { decision: "accept" } } : undefined);
+    if (!resolved) expect([...f.pending.values()][0]!.conflicted).toBe(true);
+  });
+
+  test("does not let another client use a participant's relayed callback ID", () => {
+    const f = callbackFixture();
+    f.share(approval(1));
+    const alias = f.peer.sent[0]!.id as string;
+    f.answer(alias, { decision: "accept" }, f.origin);
+    expect(f.origin.replies).toEqual([]);
+    expect([...f.pending.values()][0]!.resolved).toBe(false);
+    f.answer(alias, { decision: "decline" });
+    expect(f.origin.replies).toEqual([{ id: 1, result: { decision: "decline" } }]);
+  });
+
+  test("does not let malformed answers win before a valid decision", () => {
+    const f = callbackFixture();
+    f.share(approval(1));
+    const alias = f.peer.sent[0]!.id as string;
+    for (const result of [null, {}, { decision: "garbage" }, { decision: { acceptWithExecpolicyAmendment: {} } }]) f.answer(alias, result);
+    expect(f.origin.replies).toEqual([]);
+    expect([...f.pending.values()][0]!.resolved).toBe(false);
+    f.answer(alias, { decision: "accept" });
+    expect(f.origin.replies).toHaveLength(1);
+  });
+});
+
+describe("Gateway native callback lifetime", () => {
+
+
+  test("keeps unanswered controls when no backend can accept a reply, then routes a native replay", () => {
+    const f = callbackFixture();
+    const first = approval(1);
+    f.share(first);
+    f.origin.backend.readyState = WebSocket.CLOSED;
+    const alias = f.peer.sent[0]!.id as string;
+    f.answer(alias);
+    expect([...f.pending.values()][0]!.resolved).toBe(false);
+    expect(f.peer.sent.filter((message) => message.method === "serverRequest/resolved")).toEqual([]);
+    f.share({ ...first, id: 2 }, f.peer);
+    f.answer(alias);
+    expect(f.peer.replies).toEqual([{ id: 2, result: { decision: "accept" } }]);
+  });
+
+  test("uses an authoritative observer resolution after the original frontend disconnects", () => {
+    const f = callbackFixture();
+    f.share(approval(1));
+    f.clients.delete(f.origin.client.data.id);
+    f.origin.backend.readyState = WebSocket.CLOSED;
+    expect(handleServerRequestResolved({ id: "gateway-observer" }, {
+      method: "serverRequest/resolved", params: { threadId: "thread-1", requestId: 1 },
+    }, f.clients, f.pending, f.relayed)).toBe(true);
+    expect([...f.pending.values()][0]!.resolved).toBe(true);
+    expect(f.peer.sent.at(-1)!.method).toBe("serverRequest/resolved");
+  });
+});
+
+describe("Gateway shared nonblocking answers", () => {
+  test("keeps nonblocking input visible and mirrors its answer without resolving concurrent blocking input", () => {
+    const f = callbackFixture();
+    const input = (id: number, isBlocking: boolean) => ({
+      id, method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-1", itemId: `input-${id}`, isBlocking, questions: [] },
+    });
+    f.share(input(1, false));
+    f.share(input(2, true));
+    expect(f.peer.sent.map((message) => (message.params as Record<string, unknown>).isBlocking)).toEqual([false, true]);
+    const result = { answers: { q: { answers: ["shared reply"] } } };
+    f.answer(f.peer.sent[0]!.id as string, result);
+    expect(f.origin.replies).toEqual([{ id: 1, result }]);
+    expect(f.peer.sent.at(-1)).toMatchObject({ method: "serverRequest/resolved", params: { result } });
+    expect([...f.pending.values()].find((pending) => pending.origins.has("native:number:2"))?.resolved).toBe(false);
+  });
+
+  test("enforces native advertised approval decisions without losing the original callback", () => {
+    const f = callbackFixture();
+    const request = approval(1);
+    const amendment = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["bun", "test"] } };
+    f.share({ ...request, params: { ...request.params, availableDecisions: ["decline", amendment] } });
+    const alias = f.peer.sent[0]!.id as string;
+    f.answer(alias, { decision: "accept" });
+    f.answer(alias, { decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["sh"] } } });
+    expect(f.origin.replies).toEqual([]);
+    expect([...f.pending.values()][0]!.resolved).toBe(false);
+    f.answer(alias, { decision: amendment });
+    expect(f.origin.replies).toEqual([{ id: 1, result: { decision: amendment } }]);
+  });
+});
+
+describe("Gateway global native request-ID conflict quarantine", () => {
+  test.each([
+    { approvalId: "different-approval" }, { kind: "writeStdin" }, { threadId: "different-thread" },
+  ])("quarantines changed callback identity across origins before logical lookup", (change) => {
+    const f = callbackFixture();
+    const first = approval(7);
+    f.share(first);
+    const pending = [...f.pending.values()][0]!;
+    expect(f.share({ ...first, params: { ...first.params, ...change } }, f.peer)).toMatchObject({ conflict: true, deliverToOrigin: false });
+    expect(f.pending.size).toBe(1);
+    expect(pending.conflicted).toBe(true);
+    expect(pending.response).toBeUndefined();
+    expect(f.peer.replies).toEqual([{ id: 7, error: expect.objectContaining({ code: -32602 }) }]);
+    f.answer(f.peer.sent[0]!.id as string);
+    expect(f.origin.replies).toEqual([]);
+    expect(pending.resolved).toBe(false);
+    expect(f.peer.sent.filter((message) => message.method === "serverRequest/resolved")).toEqual([]);
   });
 });

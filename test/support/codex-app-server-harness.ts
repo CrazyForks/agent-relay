@@ -30,6 +30,8 @@ const rl = readline.createInterface({ input: process.stdin });
 let turnCount = 0;
 let initialized = false;
 let currentTurn;
+let currentModel = "gpt-5.2";
+let currentEffort = "medium";
 let threadRuntimeStatus = { type: "idle" };
 const terminals = new Map();
 function send(message) { process.stdout.write(JSON.stringify(message) + "\\n"); }
@@ -49,7 +51,7 @@ rl.on("line", (line) => {
   } else if (msg.method === "thread/start" || msg.method === "thread/resume") {
     send({ id: msg.id, result: { thread: { id: "thread-1", name: "Initial thread", status: { type: "idle" } }, initialTurnsPage: msg.method === "thread/resume" ? { data: [{ id: "latest-turn", status: "completed", items: [{ type: "commandExecution", id: "resume-command", command: "git status", status: "completed", exitCode: 0, durationMs: 12 }], startedAt: 1, completedAt: 2, durationMs: 1000 }], nextCursor: null } : null, model: "gpt-5.2", modelProvider: "openai", reasoningEffort: "medium", approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "workspaceWrite" } } });
   } else if (msg.method === "thread/read") {
-    send({ id: msg.id, result: { thread: { id: "thread-1", name: "Initial thread", status: threadRuntimeStatus, turns: currentTurn ? [currentTurn] : [] } } });
+    send({ id: msg.id, result: { thread: { id: "thread-1", name: "Initial thread", status: threadRuntimeStatus, model: currentModel, reasoningEffort: currentEffort, turns: currentTurn ? [currentTurn] : [] } } });
   } else if (msg.method === "turn/start") {
     const turnId = "turn-" + (++turnCount);
     const threadId = msg.params.threadId;
@@ -83,7 +85,15 @@ rl.on("line", (line) => {
       send({ method: "thread/name/updated", params: { threadId, threadName: "Demo thread" } });
       send({ method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: ["waitingOnApproval"] } } });
       send({ method: "thread/tokenUsage/updated", params: { threadId, turnId, tokenUsage: { last: { totalTokens: 7 }, total: { totalTokens: 42 }, modelContextWindow: 100 } } });
+    } else if (inputText === "settings cleared") {
+      currentModel = "gpt-native-custom";
+      currentEffort = null;
+      send({ method: "thread/settings/updated", params: { threadId, threadSettings: { model: currentModel, effort: "high" } } });
+      send({ method: "thread/settings/updated", params: { threadId, threadSettings: { effort: null } } });
+      send({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed", items: [] } } });
     } else if (inputText === "settings and goal") {
+      currentModel = "gpt-current";
+      currentEffort = "high";
       send({ method: "thread/settings/updated", params: { threadId, threadSettings: { cwd: "/tmp", approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "dangerFullAccess" }, activePermissionProfile: null, model: "gpt-current", modelProvider: "openai", serviceTier: null, effort: "high", summary: null, collaborationMode: { mode: "default", settings: { model: "gpt-current", reasoning_effort: "high", developer_instructions: null } }, multiAgentMode: "explicitRequestOnly", personality: null } } });
       send({ method: "thread/goal/updated", params: { threadId, turnId, goal: { threadId, objective: "Wait for quota", status: "blocked", tokenBudget: null, tokensUsed: 1, timeUsedSeconds: 2, createdAt: 1, updatedAt: 2 } } });
       send({ method: "thread/goal/updated", params: { threadId, turnId, goal: { threadId, objective: "Wait for quota", status: "usageLimited", tokenBudget: null, tokensUsed: 1, timeUsedSeconds: 2, createdAt: 1, updatedAt: 3 } } });
@@ -95,6 +105,39 @@ rl.on("line", (line) => {
       send({ method: "error", params: { threadId, error: { message: "Reconnecting... 5/5", codexErrorInfo: { message: "Stream disconnected before completion: remote host closed the connection (os error 10054)" } } } });
       send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "m1", delta: "recovered" } });
       send({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed", items: [] } } });
+    } else if (inputText === "approval callbacks") {
+      for (const [id, approvalId, kind] of [[910, "command-callback", "command"], [911, "stdin-callback", "writeStdin"]]) {
+        send({ id, method: "item/commandExecution/requestApproval", params: { threadId, turnId, itemId: "terminal-item", approvalId, kind, command: kind === "command" ? "python repl.py" : "print(1)", cwd: "/workspace", availableDecisions: ["accept", "decline"] } });
+      }
+    } else if (inputText === "approval aliases" || inputText === "approval alias conflict") {
+      const params = { threadId, turnId, itemId: "terminal-item", approvalId: "callback", kind: "command", command: "echo safe" };
+      send({ id: 910, method: "item/commandExecution/requestApproval", params });
+      send({ id: 911, method: "item/commandExecution/requestApproval", params: inputText === "approval aliases" ? params : { ...params, command: "echo changed" } });
+    } else if (inputText === "approval kinds") {
+      for (const [id, kind] of [[910, "command"], [911, "writeStdin"]]) send({ id, method: "item/commandExecution/requestApproval", params: { threadId, turnId, itemId: "terminal-item", approvalId: "callback", kind, command: "echo safe" } });
+    } else if (inputText === "approval unknown kind") {
+      send({ id: 910, method: "item/commandExecution/requestApproval", params: { threadId, turnId, itemId: "terminal-item", approvalId: "callback", kind: "unknownAction", command: "echo test" } });
+    } else if (inputText === "approval duplicate conflict") {
+      const params = { threadId, turnId, itemId: "terminal-item", approvalId: "callback", kind: "command", command: "echo safe" };
+      send({ id: 910, method: "item/commandExecution/requestApproval", params });
+      send({ id: 910, method: "item/commandExecution/requestApproval", params: { ...params, command: "echo changed" } });
+    } else if (inputText === "nonblocking question" || inputText === "concurrent questions" || inputText === "concurrent native resolutions" || inputText === "nonblocking then complete") {
+      send({ id: 920, method: "item/tool/requestUserInput", params: { threadId, turnId, itemId: "async-question", isBlocking: false, questions: [{ id: "mode", header: "Mode", question: "Optional choice", options: [] }] } });
+      send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "still-running", delta: "Working while you decide" } });
+      if (inputText === "concurrent questions" || inputText === "concurrent native resolutions") {
+        send({ id: 921, method: "item/tool/requestUserInput", params: { threadId, turnId, itemId: "blocking-question", isBlocking: true, questions: [{ id: "mode", header: "Mode", question: "Required choice", options: [] }] } });
+        send({ id: 922, method: "item/commandExecution/requestApproval", params: { threadId, turnId, itemId: "blocking-command", command: "echo test" } });
+        send({ id: 923, method: "item/commandExecution/requestApproval", params: { threadId, turnId, itemId: "blocking-command-2", command: "echo second" } });
+      }
+      if (inputText === "concurrent native resolutions") {
+        setTimeout(() => {
+          send({ method: "serverRequest/resolved", params: { threadId, requestId: 920 } });
+          send({ method: "serverRequest/resolved", params: { threadId, requestId: 921 } });
+          send({ method: "serverRequest/resolved", params: { threadId, requestId: 922 } });
+          send({ method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: [] } } });
+        }, 20);
+      }
+      if (inputText === "nonblocking then complete") setTimeout(() => send({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed", items: [] } } }), 20);
     } else if (inputText === "ask") {
       send({ id: 900, method: "item/tool/requestUserInput", params: { threadId, turnId, itemId: "item-1", questions: [{ id: "mode", header: "Mode", question: "Pick one.", options: [{ label: "Fast", description: "Quick" }] }] } });
     } else if (inputText === "ask then complete") {
@@ -166,7 +209,7 @@ rl.on("line", (line) => {
     send({ id: msg.id, result: { cleared: true } });
   } else if (msg.method === "thread/fork") {
     const threadId = msg.params.ephemeral ? "side-thread" : "fork-thread";
-    send({ id: msg.id, result: { thread: { id: threadId, name: msg.params.ephemeral ? "Side thread" : "Forked thread", status: { type: "idle" }, ephemeral: Boolean(msg.params.ephemeral) }, model: "gpt-5.2", modelProvider: "openai", reasoningEffort: "medium", approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "workspaceWrite" } } });
+    send({ id: msg.id, result: { thread: { id: threadId, name: msg.params.ephemeral ? "Side thread" : "Forked thread", status: { type: "idle" }, ephemeral: Boolean(msg.params.ephemeral) }, model: currentModel, modelProvider: "openai", reasoningEffort: currentEffort, approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "workspaceWrite" } } });
   } else if (msg.method === "thread/inject_items") {
     send({ id: msg.id, result: {} });
   } else if (msg.method === "thread/unsubscribe") {

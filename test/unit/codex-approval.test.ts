@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { approvalCopy } from "../../src/providers/agents/codex/protocol.ts";
 import { approvalChoices, approvalResponse } from "../../src/relay/ui/prompt-state.ts";
 
 describe("Codex approval decisions", () => {
@@ -36,3 +37,12 @@ describe("Codex approval decisions", () => {
     expect(approvalResponse("permissions", "session", { permissions })).toEqual({ permissions, scope: "session" });
   });
 });
+
+test("distinguishes terminal input and preserves supplied native context", () => {
+    const copy = approvalCopy("command", { kind: "writeStdin", command: "print(1)", cwd: "/workspace", environmentId: "env-a", reason: "Continue the REPL", networkApprovalContext: { host: "example.test" } });
+    expect(copy.title).toBe("Approve terminal input?");
+    expect(copy.body).toContain("Send input to an existing terminal.");
+    for (const text of ["print(1)", "/workspace", "env-a", "Continue the REPL", "example.test"]) expect(copy.body).toContain(text);
+    expect(approvalCopy("command", {}).title).toBe("Approve command?");
+    expect(approvalCopy("command", { kind: "writeStdin" }).body).toContain("command unavailable");
+  });

@@ -65,6 +65,7 @@ export interface ThreadCommandDeps {
   renderStrictCallbackPage(message: CallbackMessage, body: string | RenderedTelegramText, replyMarkup: InlineKeyboardMarkup): Promise<RenderCallbackPageResult>;
   expireCallbackPrompt(message: CallbackMessage): Promise<void>;
   clearCodexPromptsForSession(sessionKey: string): void;
+  hasBlockingCodexPrompt(sessionKey: string): boolean;
   enqueueSideEvent(scopeKey: string, task: () => Promise<void>): void;
   handleSidePromptEvent(event: AgentOutputEvent): Promise<void>;
   sendSideImage(event: AgentImageOutputEvent, replyToMessageId?: MessageId): Promise<void>;
@@ -83,7 +84,6 @@ interface ActiveSideConversation {
   activeTurnId?: string;
   presentation?: SideConversationPresentation;
   answer: string;
-  pendingRequestIds: Set<string>;
   closing: boolean;
 }
 
@@ -341,7 +341,7 @@ export class ThreadCommandService {
       await this.deps.sendRendered(conversationId, messageWithTitle("BTW input not submitted.", "Add a question or an attachment."));
       return;
     }
-    if (side.pendingRequestIds.size > 0) {
+    if (this.deps.hasBlockingCodexPrompt(side.eventSessionKey)) {
       await this.deps.sendRendered(conversationId, messageWithTitle(
         "BTW is waiting for your answer.",
         "Reply to the latest Codex question or use its buttons before sending another follow-up.",
@@ -433,7 +433,6 @@ export class ThreadCommandService {
       eventSessionKey,
       threadId: opened.threadId,
       answer: "",
-      pendingRequestIds: new Set(),
       closing: false,
     };
     this.activeSideConversations.set(scope.scopeKey, side);
@@ -497,12 +496,10 @@ export class ThreadCommandService {
       return;
     }
     if (event.type === "user_input_request" || event.type === "approval_request" || event.type === "mcp_elicitation_request") {
-      side.pendingRequestIds.add(sideRequestKey(event.requestId));
       await this.deps.handleSidePromptEvent(event);
       return;
     }
     if (event.type === "server_request_resolved") {
-      side.pendingRequestIds.delete(sideRequestKey(event.requestId));
       await this.deps.handleSidePromptEvent(event);
       return;
     }
@@ -511,7 +508,7 @@ export class ThreadCommandService {
       const presentation = side.presentation;
       side.presentation = undefined;
       side.activeTurnId = undefined;
-      side.pendingRequestIds.clear();
+      this.deps.clearCodexPromptsForSession(side.eventSessionKey);
       if (!presentation) return;
       const result: AgentSideConversationResult = {
         message: side.answer,
@@ -788,7 +785,6 @@ export class ThreadCommandService {
     if (this.activeSideConversations.get(side.scopeKey) === side) this.activeSideConversations.delete(side.scopeKey);
     this.deps.clearCodexPromptsForSession(side.eventSessionKey);
     this.deps.store.deletePendingPromptsForSession(side.eventSessionKey);
-    side.pendingRequestIds.clear();
     side.presentation = undefined;
     side.activeTurnId = undefined;
   }
@@ -1148,8 +1144,4 @@ function capitalize(value: string): string {
 
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
-}
-
-function sideRequestKey(requestId: string | number): string {
-  return `${typeof requestId}:${String(requestId)}`;
 }

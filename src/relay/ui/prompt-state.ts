@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AgentApprovalKind } from "../../ports/agent.ts";
 
 export function parsePromptPayload(payloadJson: string | undefined): Record<string, unknown> | undefined {
@@ -34,22 +35,25 @@ export function approvalChoices(kind: AgentApprovalKind, params: unknown): Array
   const choices: Array<{ action: string; label: string }> = [];
   if (supports("accept")) choices.push({ action: "once", label: "Approve once" });
   if (supports("acceptForSession")) choices.push({ action: "session", label: "Approve session" });
-  if (record?.proposedExecpolicyAmendment && (!available || available.some((value) => Boolean(asPromptRecord(value)?.acceptWithExecpolicyAmendment)))) {
+  if (record?.proposedExecpolicyAmendment && (!available || available.some((value) => isDeepStrictEqual(asPromptRecord(asPromptRecord(value)?.acceptWithExecpolicyAmendment)?.execpolicy_amendment, record.proposedExecpolicyAmendment)))) {
     choices.push({ action: "exec", label: "Approve command rule" });
   }
   const network = Array.isArray(record?.proposedNetworkPolicyAmendments) ? record.proposedNetworkPolicyAmendments : [];
   for (let index = 0; index < network.length; index += 1) {
-    if (!available || available.some((value) => Boolean(asPromptRecord(value)?.applyNetworkPolicyAmendment))) {
+    if (!available || available.some((value) => isDeepStrictEqual(asPromptRecord(asPromptRecord(value)?.applyNetworkPolicyAmendment)?.network_policy_amendment, network[index]))) {
       choices.push({ action: `net${index}`, label: `Approve network rule ${index + 1}` });
     }
   }
   if (supports("decline")) choices.push({ action: "decline", label: "Deny" });
   if (supports("cancel")) choices.push({ action: "cancel", label: "Cancel" });
-  return choices.length > 0 ? choices : [{ action: "decline", label: "Deny" }];
+  return choices;
 }
 
 export function approvalResponse(kind: AgentApprovalKind, decision: string | boolean, params: unknown): unknown {
   const action = typeof decision === "boolean" ? (decision ? "once" : "decline") : decision;
+  if (!approvalChoices(kind, params).some((choice) => choice.action === action)) {
+    throw new Error("This approval decision is not offered by Codex.");
+  }
   if (kind === "legacy_command" || kind === "legacy_patch") {
     return { decision: action === "once" || action === "session" ? "approved" : "denied" };
   }

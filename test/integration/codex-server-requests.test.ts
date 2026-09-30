@@ -325,3 +325,80 @@ describe("CodexDriver server requests and recovery", () => {
     expect(events).toContainEqual({ type: "turn_completed", sessionKey: "codex:1:demo", turnId: "turn-1", status: "completed" });
     await driver.stop(status.sessionKey);
   });});
+
+test("keeps command and stdin callbacks on one item independent", async () => {
+    const fake = fakeCodexBin();
+    const events: AgentOutputEvent[] = [];
+    const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
+    const status = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd() });
+    await driver.send(status.sessionKey, "approval callbacks");
+    await sleep(100);
+    const approvals = events.filter((event) => event.type === "approval_request");
+    expect(approvals).toHaveLength(2);
+    expect(approvals[0]).toMatchObject({ requestId: 910, itemId: "terminal-item", approvalId: "command-callback", commandExecutionKind: "command" });
+    expect(approvals[1]).toMatchObject({ requestId: 911, itemId: "terminal-item", approvalId: "stdin-callback", commandExecutionKind: "writeStdin", title: "Approve terminal input?" });
+    await driver.respond(status.sessionKey, 910, { decision: "accept" });
+    expect(status.waitingForApproval).toBe(true);
+    await expect(driver.respond(status.sessionKey, 910, { decision: "accept" })).rejects.toThrow("already been resolved");
+    await driver.respond(status.sessionKey, 911, { decision: "decline" });
+    expect(status.waitingForApproval).toBe(false);
+    await sleep(20);
+    expect(readLog(fake)).toContain('"id":911,"result":{"decision":"decline"}');
+    await driver.release(status.sessionKey);
+  });
+
+test("fails closed when a native RPC approval identity is reused with changed content", async () => {
+    const fake = fakeCodexBin();
+    const events: AgentOutputEvent[] = [];
+    const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
+    const status = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd() });
+    await driver.send(status.sessionKey, "approval duplicate conflict");
+    await sleep(100);
+    expect(events.filter((event) => event.type === "approval_request")).toHaveLength(1);
+    expect(events).toContainEqual(expect.objectContaining({ type: "server_request_resolved", requestId: 910 }));
+    await expect(driver.respond(status.sessionKey, 910, { decision: "accept" })).rejects.toThrow("already been resolved");
+    expect(readLog(fake)).toContain("Conflicting approval callback identity");
+    expect(status.waitingForApproval).toBe(false);
+    await driver.release(status.sessionKey);
+  });
+
+describe("native approval callback aliases", () => {
+  for (const scenario of ["approval aliases", "approval alias conflict", "approval kinds", "approval unknown kind"]) {
+    test(scenario, async () => {
+      const fake = fakeCodexBin();
+      const events: AgentOutputEvent[] = [];
+      const driver = new CodexDriver({ codexBin: fake, sandbox: "workspace-write", approval: "on-request" }, (event) => { events.push(event); }, () => undefined);
+      const status = await driver.start({ conversationId: 1, workspaceName: "demo", workspacePath: process.cwd() });
+      await driver.send(status.sessionKey, scenario);
+      await sleep(100);
+      const approvals = events.filter((event) => event.type === "approval_request");
+      if (scenario === "approval aliases") {
+        expect(approvals).toHaveLength(1);
+        await driver.respond(status.sessionKey, 910, { decision: "accept" });
+        expect(status.waitingForApproval).toBe(false);
+        await expect(driver.respond(status.sessionKey, 911, { decision: "decline" })).rejects.toThrow("already been resolved");
+        await sleep(20);
+        for (const id of [910, 911]) expect(readLog(fake)).toContain(`"id":${id},"result":{"decision":"accept"}`);
+      } else if (scenario === "approval kinds") {
+        expect(approvals).toHaveLength(2);
+        await driver.respond(status.sessionKey, 910, { decision: "accept" });
+        expect(status.waitingForApproval).toBe(true);
+        await driver.respond(status.sessionKey, 911, { decision: "decline" });
+        expect(status.waitingForApproval).toBe(false);
+      } else if (scenario === "approval alias conflict") {
+        expect(approvals).toHaveLength(1);
+        expect(events.filter((event) => event.type === "server_request_resolved")).toHaveLength(0);
+        expect(status.waitingForApproval).toBe(true);
+        const logs = readLog(fake).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+        expect(logs).toContainEqual({ id: 911, error: { code: -32602, message: "Conflicting approval callback identity." } });
+        expect(logs.some((message) => message.id === 910 && message.error)).toBe(false);
+        await driver.respond(status.sessionKey, 910, { decision: "accept" });
+        expect(status.waitingForApproval).toBe(false);
+      } else {
+        expect(approvals).toHaveLength(0);
+        expect(readLog(fake)).toContain("Unsupported command approval kind.");
+      }
+      await driver.release(status.sessionKey);
+    });
+  }
+});

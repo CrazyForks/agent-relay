@@ -747,6 +747,7 @@ describe("relay controller Codex prompts", () => {
       type: "approval_request" as const,
       sessionKey: "codex:1:demo",
       requestId: "approval-first",
+      approvalId: "same-native-callback",
       threadId: "thread-1",
       turnId: "turn-1",
       itemId: "command-1",
@@ -759,7 +760,7 @@ describe("relay controller Codex prompts", () => {
     const approvalStart = adapter.sent.length;
     await router.handleAgentOutput(approval);
     const approvalCard = adapter.sent.at(-1)!;
-    await router.handleAgentOutput({ ...approval, requestId: "approval-copy", body: "changed command", params: { command: "changed command" } });
+    await router.handleAgentOutput({ ...approval, requestId: "approval-copy" });
     expect(adapter.sent.slice(approvalStart)).toHaveLength(1);
     expect(approvalCard.text).toContain("bun test");
     expect(approvalCard.text).not.toContain("changed command");
@@ -1032,3 +1033,143 @@ describe("relay controller Codex prompts", () => {
     expect(adapter.edited.at(-1)?.text).toContain("denied");
     expect(adapter.reactions.at(-1)).toEqual({ conversationId: "1", messageId: "1", emoji: "✍" });
   });});
+
+async function activePromptFixture() {
+  const state = fixture();
+  const path = join(state.root, "demo");
+  mkdirSync(path);
+  state.store.upsertWorkspace({ name: "demo", path, createdAt: 1 });
+  state.store.bindConversation(1, "demo");
+  await state.router.handle(textMessage("keep working"));
+  return state;
+}
+
+const nativeApproval = {
+  type: "approval_request" as const,
+  sessionKey: "codex:1:demo",
+  threadId: "thread-1",
+  turnId: "turn-1",
+  itemId: "terminal-1",
+  requestId: "rpc-command",
+  approvalId: "approval-command",
+  commandExecutionKind: "command" as const,
+  method: "item/commandExecution/requestApproval",
+  approvalKind: "command" as const,
+  title: "Approve command?",
+  body: "bun test",
+  params: { command: "bun test", availableDecisions: ["accept", "decline"] },
+};
+
+
+describe("Codex 0.159 callback and async question semantics", () => {
+  test("independent native callbacks on one item keep their own cards and answers", async () => {
+    const { router, store, adapter, agent } = await activePromptFixture();
+    await router.handleAgentOutput(nativeApproval);
+    const commandCard = adapter.sent.at(-1)!;
+    const stdin = {
+      ...nativeApproval,
+      requestId: "rpc-stdin",
+      approvalId: "approval-stdin",
+      commandExecutionKind: "writeStdin" as const,
+      title: "Send input to existing terminal?",
+      body: "Existing command: bun test",
+    };
+    await router.handleAgentOutput(stdin);
+    const stdinCard = adapter.sent.at(-1)!;
+    expect(stdinCard.messageId).not.toBe(commandCard.messageId);
+    await router.handle(callbackMessage(commandCard.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data, 7, "first", commandCard.messageId));
+    expect(agent.responses).toEqual([{ key: nativeApproval.sessionKey, requestId: "rpc-command", result: { decision: "accept" } }]);
+    expect(store.getPendingPrompt("1", stdinCard.messageId!)).toBeDefined();
+    expect(store.getTask(1)?.status).toBe("blocked");
+
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: nativeApproval.sessionKey, requestId: "rpc-command", result: { decision: "accept" } });
+    const beforeDuplicate = adapter.sent.length;
+    await router.handleAgentOutput({ ...nativeApproval, requestId: "rpc-command-copy" });
+    expect(adapter.sent).toHaveLength(beforeDuplicate);
+    await router.handle(callbackMessage(commandCard.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data, 7, "late", commandCard.messageId));
+    expect(agent.responses).toHaveLength(1);
+    expect(store.getPendingPrompt("1", stdinCard.messageId!)).toBeDefined();
+    await router.handle(callbackMessage(stdinCard.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data, 7, "stdin", stdinCard.messageId));
+    expect(agent.responses.at(-1)?.requestId).toBe("rpc-stdin");
+    expect(store.getTask(1)?.status).toBe("running");
+  });
+
+  test("a changed duplicate cannot hide or answer the original native callback", async () => {
+    const { router, store, adapter, agent, logLines } = await activePromptFixture();
+    await router.handleAgentOutput(nativeApproval);
+    const card = adapter.sent.at(-1)!;
+    const count = adapter.sent.length;
+    await router.handleAgentOutput({ ...nativeApproval, requestId: "conflicting-copy", body: "different command", params: { command: "different command" } });
+    expect(adapter.sent).toHaveLength(count);
+    expect(logLines.some((line) => line.includes("conflicting_duplicate_interactive_request_ignored"))).toBe(true);
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: nativeApproval.sessionKey, requestId: "conflicting-copy", result: { decision: "accept" } });
+    expect(store.getPendingPrompt("1", card.messageId!)).toBeDefined();
+    expect(store.getTask(1)?.status).toBe("blocked");
+    expect(agent.responses).toEqual([]);
+    await router.handle(callbackMessage(card.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data, 7, "original", card.messageId));
+    expect(agent.responses).toEqual([{ key: nativeApproval.sessionKey, requestId: "rpc-command", result: { decision: "accept" } }]);
+  });
+
+  test("command and writeStdin callbacks remain distinct even when approval IDs coincide", async () => {
+    const { router, store, adapter } = await activePromptFixture();
+    await router.handleAgentOutput(nativeApproval);
+    const first = adapter.sent.at(-1)!;
+    await router.handleAgentOutput({ ...nativeApproval, requestId: "rpc-stdin", commandExecutionKind: "writeStdin" as const });
+    const second = adapter.sent.at(-1)!;
+    expect(first.messageId).not.toBe(second.messageId);
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: nativeApproval.sessionKey, requestId: "rpc-command", result: { decision: "accept" } });
+    expect(store.getPendingPrompt("1", first.messageId!)).toBeUndefined();
+    expect(store.getPendingPrompt("1", second.messageId!)).toBeDefined();
+    expect(store.getTask(1)?.status).toBe("blocked");
+  });
+
+  test("legacy approval fallback uses typed RPC IDs instead of item or matching payload", async () => {
+    const { router, adapter, store } = await activePromptFixture();
+    await router.handleAgentOutput({ ...nativeApproval, approvalId: undefined, requestId: 71 });
+    const numericCard = adapter.sent.at(-1)!;
+    await router.handleAgentOutput({ ...nativeApproval, approvalId: undefined, requestId: "71" });
+    const stringCard = adapter.sent.at(-1)!;
+    expect(stringCard.messageId).not.toBe(numericCard.messageId);
+    const count = adapter.sent.length;
+    await router.handleAgentOutput({ ...nativeApproval, approvalId: undefined, requestId: 71 });
+    expect(adapter.sent).toHaveLength(count);
+    await router.handleAgentOutput({ type: "server_request_resolved", sessionKey: nativeApproval.sessionKey, requestId: 71 });
+    expect(store.getPendingPrompt("1", numericCard.messageId!)).toBeUndefined();
+    expect(store.getPendingPrompt("1", stringCard.messageId!)).toBeDefined();
+  });
+
+  test("unsupported approval callbacks cannot expand the native available decisions", async () => {
+    const { router, adapter, store, agent } = await activePromptFixture();
+    await router.handleAgentOutput({ ...nativeApproval, commandExecutionKind: "writeStdin" as const });
+    const card = adapter.sent.at(-1)!;
+    const once = card.options!.replyMarkup!.inline_keyboard[0]![0]!.callback_data;
+    expect(card.options!.replyMarkup!.inline_keyboard.flat().map((button) => button.text)).toEqual(["Approve once", "Deny"]);
+    await router.handle(callbackMessage(once.replace(/:once$/, ":session"), 7, "unsupported", card.messageId));
+    expect(agent.responses).toEqual([]);
+    expect(store.getPendingPrompt("1", card.messageId!)).toBeDefined();
+    expect(adapter.answered.at(-1)?.text).toContain("not offered by Codex");
+  });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+});

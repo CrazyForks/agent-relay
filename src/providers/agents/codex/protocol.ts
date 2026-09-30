@@ -481,9 +481,19 @@ export function approvalCopy(kind: AgentApprovalKind, params: Record<string, unk
     const command = Array.isArray(params?.command) ? params.command.join(" ") : typeof params?.command === "string" ? params.command : "(command unavailable)";
     const cwd = typeof params?.cwd === "string" ? params.cwd : undefined;
     const reason = typeof params?.reason === "string" ? params.reason : undefined;
+    const writeStdin = kind === "command" && params?.kind === "writeStdin";
+    const environment = getString(params, "environmentId");
+    const network = params?.networkApprovalContext == null ? undefined : JSON.stringify(params.networkApprovalContext);
     return {
-      title: "Approve command?",
-      body: [reason, cwd ? `cwd: ${cwd}` : undefined, command].filter(Boolean).join("\n"),
+      title: writeStdin ? "Approve terminal input?" : "Approve command?",
+      body: [
+        writeStdin ? "Send input to an existing terminal." : undefined,
+        reason,
+        cwd ? `cwd: ${cwd}` : undefined,
+        environment ? `Environment: ${environment}` : undefined,
+        network ? `Network context: ${network}` : undefined,
+        writeStdin ? `Context supplied by Codex: ${command}` : command,
+      ].filter(Boolean).join("\n"),
     };
   }
   if (kind === "permissions") {

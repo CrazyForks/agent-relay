@@ -231,12 +231,8 @@ function interactiveRequestKey(threadId: string, requestId: string | number): st
   return `${threadId}\0${typeof requestId}:${String(requestId)}`;
 }
 
-function sameInteractiveRequestId(left: string | number, right: string | number): boolean {
-  return typeof left === typeof right && left === right;
-}
-
 function waitingKindForRequest(method: string): "approval" | "userInput" {
-  return method.includes("requestApproval") ? "approval" : "userInput";
+  return method.includes("requestApproval") || method === "execCommandApproval" || method === "applyPatchApproval" ? "approval" : "userInput";
 }
 
 function localPlanDecision(
@@ -271,6 +267,10 @@ interface PendingInteractiveRequest {
   threadId: string;
   requestMethod: string;
   requestSignature: string;
+  requestIds: Set<string | number>;
+  approvalId?: string;
+  commandExecutionKind?: "command" | "writeStdin";
+  isBlocking: boolean;
   turnId?: string;
   sessionKeys: Set<string>;
   deliveryStarted: Set<string>;
@@ -931,7 +931,7 @@ export class CodexDriver implements AgentDriver {
   }
 
   async respond(sessionKey: string, requestId: string | number, result: unknown): Promise<void> {
-    const requestsWithId = [...this.pendingInteractiveRequests.values()].filter((candidate) => sameInteractiveRequestId(candidate.requestId, requestId));
+    const requestsWithId = [...this.pendingInteractiveRequests.values()].filter((candidate) => candidate.requestIds.has(requestId));
     const request = requestsWithId.find((candidate) => candidate.sessionKeys.has(sessionKey) && !candidate.resolved)
       ?? requestsWithId.find((candidate) => candidate.sessionKeys.has(sessionKey));
     if (request) {
@@ -942,9 +942,19 @@ export class CodexDriver implements AgentDriver {
         request.hasResolutionResult = true;
         request.resolutionResult = result;
       }
+      let responsesWritten = 0;
       try {
-        await this.rpc.respond(requestId, result);
+        for (const aliasId of request.requestIds) {
+          await this.rpc.respond(aliasId, result);
+          responsesWritten += 1;
+        }
       } catch (error) {
+        if (responsesWritten > 0) {
+          // Once any alias has received the decision, never permit a competing
+          // answer for that same callback even if another transport write fails.
+          void this.finishInteractiveRequest(request.requestId, request);
+          throw error;
+        }
         request.resolved = false;
         request.hasResolutionResult = false;
         request.resolutionResult = undefined;
@@ -955,7 +965,7 @@ export class CodexDriver implements AgentDriver {
         // clients. A successful socket write only means this response reached
         // the Gateway; wait for its authoritative resolved notification before
         // presenting a winning value.
-        this.clearThreadWaitingState(request.threadId);
+        this.refreshThreadWaitingState(request.threadId, request);
         return;
       }
       // A Relay IM callback runs inside its per-conversation queue. Resolution
@@ -974,9 +984,7 @@ export class CodexDriver implements AgentDriver {
       return;
     }
     if (requestsWithId.length > 0) throw new Error("This Codex request does not belong to the current Relay scope.");
-    await this.rpc.respond(requestId, result);
-    const running = this.sessions.get(sessionKey);
-    if (running) this.clearThreadWaitingState(running.status.threadId);
+    throw new Error("This Codex request is no longer pending in the current Relay scope.");
   }
 
   async runBuiltinCommand(key: string, command: AgentBuiltinCommand): Promise<AgentBuiltinResult> {
@@ -1187,7 +1195,7 @@ export class CodexDriver implements AgentDriver {
       if (request.threadId !== threadId) continue;
       if (!request.resolved) {
         request.resolved = true;
-        await this.rpc.rejectRequest(request.requestId, -32000, "Side conversation closed.").catch((error) => {
+        await Promise.all([...request.requestIds].map((requestId) => this.rpc.rejectRequest(requestId, -32000, "Side conversation closed."))).catch((error) => {
           this.logger.warn("codex.side_conversation_request_cancel_failed", {
             session_key: key,
             thread_id: threadId,
@@ -1198,7 +1206,7 @@ export class CodexDriver implements AgentDriver {
         await this.finishInteractiveRequest(request.requestId, request);
       }
       if (request.resolutionRetryTimer) clearTimeout(request.resolutionRetryTimer);
-      this.pendingInteractiveRequests.delete(requestKey);
+      this.removeInteractiveRequest(request);
     }
     await this.request("thread/unsubscribe", { threadId });
     this.sideConversations.delete(threadId);
@@ -1578,6 +1586,7 @@ export class CodexDriver implements AgentDriver {
         const running = this.sessions.get(sessionKey);
         if (running) applyThreadMetadata(running.status, asRecord(params?.thread));
       }
+      if (startedThreadId) this.refreshThreadWaitingState(startedThreadId);
       this.logger.debug("codex.thread_started", { thread_id: startedThreadId, session_keys: sessionKeys.join(",") });
       return;
     }
@@ -1709,6 +1718,7 @@ export class CodexDriver implements AgentDriver {
       else if (turnId) running.status.latestTurn = { id: turnId, status: "inProgress", activities: [] };
       running.status.waitingForApproval = false;
       running.status.waitingForUserInput = false;
+      this.refreshThreadWaitingState(threadId!);
       clearRecentError(running);
       await this.emitActivity(key, { kind: "item", category: "other", label: "Turn started", status: "started" }, params, turnId ? `turn:${turnId}` : undefined);
       return;
@@ -1829,6 +1839,7 @@ export class CodexDriver implements AgentDriver {
       if (fences?.size === 0) this.resolvedWaitingFences.delete(threadId!);
       running.status.waitingForApproval = approvalActive && !fences?.has("approval");
       running.status.waitingForUserInput = userInputActive && !fences?.has("userInput");
+      this.refreshThreadWaitingState(threadId!);
       return;
     }
 
@@ -2147,6 +2158,7 @@ export class CodexDriver implements AgentDriver {
     status.threadStatus = state.threadStatus;
     status.waitingForApproval = state.waitingOn === "approval";
     status.waitingForUserInput = state.waitingOn === "userInput";
+    this.refreshThreadWaitingState(state.threadId);
     if (state.activeTurn) {
       status.activeTurnId = state.activeTurn.turnId;
       status.latestTurn = {
@@ -2517,6 +2529,27 @@ export class CodexDriver implements AgentDriver {
     }
   }
 
+  private refreshThreadWaitingState(threadId: string, resolvedRequest?: PendingInteractiveRequest): void {
+    const pending = new Set<"approval" | "userInput">();
+    for (const request of this.pendingInteractiveRequests.values()) {
+      if (request.threadId === threadId && !request.resolved && request.isBlocking) pending.add(waitingKindForRequest(request.requestMethod));
+    }
+    const resolvedKind = resolvedRequest?.isBlocking ? waitingKindForRequest(resolvedRequest.requestMethod) : undefined;
+    if (resolvedKind && !pending.has(resolvedKind)) {
+      const fences = this.resolvedWaitingFences.get(threadId) ?? new Set<"approval" | "userInput">();
+      fences.add(resolvedKind);
+      this.resolvedWaitingFences.set(threadId, fences);
+    }
+    for (const key of this.sessionKeysForThread(threadId)) {
+      const running = this.sessions.get(key);
+      if (!running) continue;
+      if (pending.has("approval")) running.status.waitingForApproval = true;
+      else if (resolvedKind === "approval") running.status.waitingForApproval = false;
+      if (pending.has("userInput")) running.status.waitingForUserInput = true;
+      else if (resolvedKind === "userInput") running.status.waitingForUserInput = false;
+    }
+  }
+
   private registerInteractiveRequest(
     requestId: string | number,
     threadId: string,
@@ -2524,12 +2557,17 @@ export class CodexDriver implements AgentDriver {
     requestMethod: string,
     turnId?: string,
     requestSignature = requestMethod,
+    isBlocking = true,
+    approvalId?: string,
+    commandExecutionKind?: "command" | "writeStdin",
   ): boolean {
     const mapKey = interactiveRequestKey(threadId, requestId);
-    const previous = this.pendingInteractiveRequests.get(mapKey);
+    const previous = this.pendingInteractiveRequests.get(mapKey)
+      ?? (approvalId ? [...this.pendingInteractiveRequests.values()].find((candidate) => candidate.approvalId === approvalId && candidate.commandExecutionKind === commandExecutionKind
+        && candidate.threadId === threadId && candidate.turnId === turnId && candidate.requestMethod === requestMethod) : undefined);
     if (previous?.resolved && previous.turnId && turnId && previous.turnId !== turnId) {
       if (previous.resolutionRetryTimer) clearTimeout(previous.resolutionRetryTimer);
-      this.pendingInteractiveRequests.delete(mapKey);
+      this.removeInteractiveRequest(previous);
     } else if (previous) {
       const conflict = previous.threadId !== threadId
         || previous.requestMethod !== requestMethod
@@ -2543,16 +2581,45 @@ export class CodexDriver implements AgentDriver {
       };
       if (conflict) this.logger.warn("codex.conflicting_duplicate_server_request_ignored", logFields);
       else this.logger.info("codex.duplicate_server_request_coalesced", logFields);
-      if (conflict || previous.resolved) return false;
+      if (conflict && previous.requestIds.has(requestId) && waitingKindForRequest(requestMethod) === "approval" && !previous.resolved) {
+        // A reused RPC identity with changed security content is ambiguous.
+        // Retire its controls and reject it rather than allowing an old card to
+        // approve the replacement payload.
+        previous.resolved = true;
+        previous.requestIds.add(requestId);
+        this.pendingInteractiveRequests.set(mapKey, previous);
+        for (const aliasId of previous.requestIds) {
+          void this.rpc.rejectRequest(aliasId, -32602, "Conflicting approval callback identity.").catch((error) => {
+            this.logger.warn("codex.conflicting_approval_rejection_failed", { ...logFields, error: toError(error) });
+          });
+        }
+        void this.finishInteractiveRequest(requestId, previous).catch((error) => {
+          this.logger.warn("codex.conflicting_approval_resolution_failed", { ...logFields, error: toError(error) });
+        });
+      }
+      if (conflict || previous.resolved) {
+        if (!previous.requestIds.has(requestId)) {
+          void this.rpc.rejectRequest(requestId, -32602, conflict ? "Conflicting approval callback identity." : "Approval callback already resolved.").catch((error) => {
+            this.logger.warn("codex.duplicate_approval_rejection_failed", { ...logFields, error: toError(error) });
+          });
+        }
+        return false;
+      }
+      previous.requestIds.add(requestId);
+      this.pendingInteractiveRequests.set(mapKey, previous);
       for (const sessionKeyValue of sessionKeys) previous.sessionKeys.add(sessionKeyValue);
       return true;
     }
-    this.resolvedWaitingFences.get(threadId)?.delete(waitingKindForRequest(requestMethod));
+    if (isBlocking) this.resolvedWaitingFences.get(threadId)?.delete(waitingKindForRequest(requestMethod));
     this.pendingInteractiveRequests.set(mapKey, {
       requestId,
       threadId,
       requestMethod,
       requestSignature,
+      requestIds: new Set([requestId]),
+      ...(approvalId ? { approvalId } : {}),
+      ...(commandExecutionKind ? { commandExecutionKind } : {}),
+      isBlocking,
       ...(turnId ? { turnId } : {}),
       sessionKeys: new Set(sessionKeys),
       deliveryStarted: new Set(),
@@ -2563,6 +2630,7 @@ export class CodexDriver implements AgentDriver {
       sideResolutionDelivered: false,
       resolutionRetryCount: 0,
     });
+    this.refreshThreadWaitingState(threadId);
     return true;
   }
 
@@ -2581,7 +2649,7 @@ export class CodexDriver implements AgentDriver {
   ): Promise<void> {
     const request = threadId
       ? this.pendingInteractiveRequests.get(interactiveRequestKey(threadId, requestId))
-      : [...this.pendingInteractiveRequests.values()].find((candidate) => sameInteractiveRequestId(candidate.requestId, requestId) && !candidate.resolved);
+      : [...this.pendingInteractiveRequests.values()].find((candidate) => candidate.requestIds.has(requestId) && !candidate.resolved);
     if (!request) return;
     if (resolution && !request.hasResolutionResult) {
       request.hasResolutionResult = true;
@@ -2592,7 +2660,7 @@ export class CodexDriver implements AgentDriver {
       }
     }
     request.resolved = true;
-    await this.finishInteractiveRequest(requestId, request);
+    await this.finishInteractiveRequest(request.requestId, request);
   }
 
   private interactiveRequestIsResolved(requestId: string | number, threadId: string): boolean {
@@ -2607,11 +2675,8 @@ export class CodexDriver implements AgentDriver {
   }
 
   private async finishInteractiveRequest(requestId: string | number, request: PendingInteractiveRequest): Promise<void> {
-    this.clearThreadWaitingState(request.threadId);
-    const waitingKind = waitingKindForRequest(request.requestMethod);
-    const fences = this.resolvedWaitingFences.get(request.threadId) ?? new Set<"approval" | "userInput">();
-    fences.add(waitingKind);
-    this.resolvedWaitingFences.set(request.threadId, fences);
+    requestId = request.requestId;
+    this.refreshThreadWaitingState(request.threadId, request);
     let retryRequired = false;
     const side = this.sideConversations.get(request.threadId);
     if (side && request.requestDelivered.has(side.sessionKey) && !request.sideResolutionDelivered) {
@@ -2664,10 +2729,9 @@ export class CodexDriver implements AgentDriver {
         });
       }
     }
-    // Request delivery and resolution can overlap across Gateway clients. Clear
-    // again after every per-scope callback so a late renderer cannot restore the
-    // waiting flags after the request has already resolved.
-    this.clearThreadWaitingState(request.threadId);
+    // Delivery/resolution can overlap. Recompute rather than clearing another
+    // callback's blocking state, including requests opened during presentation.
+    this.refreshThreadWaitingState(request.threadId, request);
     if (retryRequired && request.resolutionRetryCount < 3 && !request.resolutionRetryTimer) {
       request.resolutionRetryCount += 1;
       request.resolutionRetryTimer = setTimeout(() => {
@@ -2687,18 +2751,25 @@ export class CodexDriver implements AgentDriver {
     setTimeout(() => {
       if (this.pendingInteractiveRequests.get(mapKey) !== request) return;
       if (request.resolutionRetryTimer) clearTimeout(request.resolutionRetryTimer);
-      this.pendingInteractiveRequests.delete(mapKey);
+      this.removeInteractiveRequest(request);
     }, 5 * 60_000).unref();
   }
 
   private async finishTerminalInteractiveRequests(threadId: string, turnId: string | undefined): Promise<void> {
     for (const [mapKey, request] of [...this.pendingInteractiveRequests]) {
-      if (request.threadId !== threadId) continue;
+      if (this.pendingInteractiveRequests.get(mapKey) !== request || request.threadId !== threadId) continue;
       if (turnId && request.turnId && request.turnId !== turnId) continue;
       request.resolved = true;
       await this.finishInteractiveRequest(request.requestId, request);
       if (request.resolutionRetryTimer) clearTimeout(request.resolutionRetryTimer);
-      this.pendingInteractiveRequests.delete(mapKey);
+      this.removeInteractiveRequest(request);
+    }
+  }
+
+  private removeInteractiveRequest(request: PendingInteractiveRequest): void {
+    for (const requestId of request.requestIds) {
+      const key = interactiveRequestKey(request.threadId, requestId);
+      if (this.pendingInteractiveRequests.get(key) === request) this.pendingInteractiveRequests.delete(key);
     }
   }
 
@@ -2731,7 +2802,7 @@ export class CodexDriver implements AgentDriver {
       logger: this.logger,
       onOutput: this.onOutput,
       emitActivity: (key, activity, params) => this.emitActivity(key, activity, params),
-      registerRequest: (requestId, threadId, sessionKeys, method, turnId, signature) => this.registerInteractiveRequest(requestId, threadId, sessionKeys, method, turnId, signature),
+      registerRequest: (requestId, threadId, sessionKeys, method, turnId, signature, isBlocking, approvalId, commandExecutionKind) => this.registerInteractiveRequest(requestId, threadId, sessionKeys, method, turnId, signature, isBlocking, approvalId, commandExecutionKind),
       requestIsResolved: (requestId, threadId) => this.interactiveRequestIsResolved(requestId, threadId),
       claimRequestDelivery: (requestId, threadId, sessionKeyValue) => this.claimInteractiveRequestDelivery(requestId, threadId, sessionKeyValue),
       markRequestDelivered: (requestId, threadId, sessionKeyValue) => this.markInteractiveRequestDelivered(requestId, threadId, sessionKeyValue),

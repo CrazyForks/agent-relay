@@ -55,7 +55,7 @@ interface InteractiveRequestClaim {
   signature: string;
   request: InteractiveRequestEvent;
   localUserInputResultSignature?: string;
-  state: "rendering" | "active" | "resolved";
+  state: "rendering" | "active" | "answered" | "resolved";
   expiresAt: number;
   requestIds: Map<string, string | number>;
 }
@@ -81,6 +81,7 @@ export class CodexPromptFlow {
     requestId: string | number;
     questions: AgentUserInputQuestion[];
     answers: Record<string, { answers: string[] }>;
+    isBlocking: boolean;
   }>();
   private readonly renderedRequests = new Map<string, { scopeKey: string; promptMessageId: MessageId }>();
   private readonly requestClaims = new Map<string, InteractiveRequestClaim>();
@@ -88,7 +89,10 @@ export class CodexPromptFlow {
   private readonly mcp: McpElicitationFlow;
 
   constructor(private readonly deps: CodexPromptFlowDeps) {
-    this.mcp = new McpElicitationFlow(deps);
+    this.mcp = new McpElicitationFlow({
+      ...deps,
+      agent: { respond: (sessionKey, requestId, result) => this.respondToRequest(sessionKey, requestId, result) },
+    });
   }
 
   async handleUserInputRequest(event: AgentUserInputRequestEvent): Promise<boolean> {
@@ -99,7 +103,7 @@ export class CodexPromptFlow {
     const token = shortToken();
     const expiresAt = Date.now() + CODEX_PROMPT_TTL_MS;
     const key = codexRequestKey(event.sessionKey, event.requestId);
-    this.codexRequests.set(key, { sessionKey: event.sessionKey, requestId: event.requestId, questions: event.questions, answers: {} });
+    this.codexRequests.set(key, { sessionKey: event.sessionKey, requestId: event.requestId, questions: event.questions, answers: {}, isBlocking: event.isBlocking !== false });
 
     try {
       const first = event.questions[0];
@@ -178,6 +182,7 @@ export class CodexPromptFlow {
       isOther: Boolean(question.isOther),
       options,
       totalQuestions,
+      isBlocking: request?.isBlocking !== false,
     });
     const useInlineOptions = !question.isSecret && options.length > 0 && this.deps.adapter.capabilities.inlineActions;
     const result = await this.deps.sendRendered(scope.scopeKey, formatCodexQuestion(question, questionIndex, totalQuestions), {
@@ -206,7 +211,7 @@ export class CodexPromptFlow {
     const pending = message.messageId ? this.deps.store.getPendingPrompt(message.conversationId, message.messageId) : undefined;
     const data = parsePromptPayload(pending?.payloadJson);
     if (!pending || pending.kind !== "codex_user_input" || !data || data.token !== token || isExpired(pending)) {
-      await this.expireQuestionPrompt(message);
+      await this.expireQuestionPrompt(message, data?.isBlocking !== false);
       return;
     }
 
@@ -364,7 +369,7 @@ export class CodexPromptFlow {
     const data = parsePromptPayload(pending?.payloadJson);
     if (!pending || pending.kind !== "codex_user_input" || !data || isExpired(pending)) {
       this.deps.store.deletePendingPrompt(conversationId, promptMessageId);
-      await this.deps.sendRendered(conversationId, expiredQuestionMessage());
+      await this.deps.sendRendered(conversationId, expiredQuestionMessage(data?.isBlocking !== false));
       return;
     }
     const selectedAnswer = typeof data.selectedAnswer === "string" ? data.selectedAnswer : undefined;
@@ -413,7 +418,7 @@ export class CodexPromptFlow {
     if (!request) {
       const scopeKey = pending.scopeKey ?? pending.conversationId;
       this.deps.store.deletePendingPrompt(scopeKey, pending.promptMessageId);
-      await this.deps.sendRendered(scopeKey, expiredQuestionMessage());
+      await this.deps.sendRendered(scopeKey, expiredQuestionMessage(data.isBlocking !== false));
       return "expired";
     }
 
@@ -430,12 +435,14 @@ export class CodexPromptFlow {
     const resultSignature = canonicalJson(response.result);
     if (claim?.kind === "user_input_request") claim.localUserInputResultSignature = resultSignature;
     try {
-      await this.deps.agent.respond(response.sessionKey, response.requestId, response.result);
+      await this.respondToRequest(response.sessionKey, response.requestId, response.result);
     } catch (error) {
       if (claim?.localUserInputResultSignature === resultSignature) claim.localUserInputResultSignature = undefined;
       throw error;
     }
-    await this.deps.markActiveTask(response.sessionKey, "running");
+    if (claim?.request.type !== "user_input_request" || claim.request.isBlocking !== false) {
+      await this.deps.markActiveTask(response.sessionKey, "running", claim?.request.turnId);
+    }
   }
 
   async answerApproval(message: CallbackMessage, payload: string): Promise<void> {
@@ -448,6 +455,9 @@ export class CodexPromptFlow {
       return;
     }
     if (!pending.sessionKey || !this.deps.agent.respond) throw new Error("Approval session is missing.");
+    if (!approvalChoices(data.approvalKind as AgentApprovalKind, data.params).some((choice) => choice.action === decision)) {
+      throw new Error("This approval decision is not offered by Codex.");
+    }
     const approved = decision === "once" || decision === "session" || decision === "turn" || decision === "exec" || Boolean(decision?.startsWith("net"));
     await this.deps.renderStrictCallbackPage(
       message,
@@ -459,13 +469,13 @@ export class CodexPromptFlow {
       { inline_keyboard: [] },
     );
     this.deps.store.deletePendingPrompt(message.conversationId, pending.promptMessageId);
-    await this.deps.agent.respond(pending.sessionKey, data.requestId as string | number, approvalResponse(data.approvalKind as AgentApprovalKind, decision ?? "decline", data.params));
+    await this.respondToRequest(pending.sessionKey, data.requestId as string | number, approvalResponse(data.approvalKind as AgentApprovalKind, decision ?? "decline", data.params));
     await this.deps.markActiveTask(pending.sessionKey, "running");
   }
 
-  private async expireQuestionPrompt(message: CallbackMessage): Promise<void> {
+  private async expireQuestionPrompt(message: CallbackMessage, isBlocking: boolean): Promise<void> {
     if (message.messageId) this.deps.store.deletePendingPrompt(message.conversationId, message.messageId);
-    await this.deps.renderStrictCallbackPage(message, expiredQuestionMessage(), { inline_keyboard: [] });
+    await this.deps.renderStrictCallbackPage(message, expiredQuestionMessage(isBlocking), { inline_keyboard: [] });
   }
 
   private async expireApprovalPrompt(
@@ -476,20 +486,23 @@ export class CodexPromptFlow {
     if (message.messageId) this.deps.store.deletePendingPrompt(message.conversationId, message.messageId);
     const agent = this.deps.agent;
     const sessionKeyValue = pending?.sessionKey;
-    if (sessionKeyValue && data && data.requestId !== undefined && typeof data.approvalKind === "string" && agent.respond) {
+    const expirationDecision = data && typeof data.approvalKind === "string"
+      ? approvalChoices(data.approvalKind as AgentApprovalKind, data.params).find((choice) => choice.action === "decline" || choice.action === "cancel")?.action
+      : undefined;
+    if (sessionKeyValue && data && data.requestId !== undefined && typeof data.approvalKind === "string" && agent.respond && expirationDecision) {
       this.renderedRequests.delete(codexRequestKey(sessionKeyValue, data.requestId as string | number));
       await this.deps.renderStrictCallbackPage(
         message,
         messageWithTitle(
           "Approval expired.",
-          "The blocked action was denied. Resend the instruction if you still want Codex to continue.",
+          `The blocked action was ${expirationDecision === "cancel" ? "cancelled" : "denied"}. Resend the instruction if you still want Codex to continue.`,
         ),
         { inline_keyboard: [] },
       );
-      await agent.respond(
+      await this.respondToRequest(
         sessionKeyValue,
         data.requestId as string | number,
-        approvalResponse(data.approvalKind as AgentApprovalKind, false, data.params),
+        approvalResponse(data.approvalKind as AgentApprovalKind, expirationDecision, data.params),
       );
       await this.deps.markActiveTask(sessionKeyValue, "running");
       return;
@@ -515,7 +528,10 @@ export class CodexPromptFlow {
     this.mcp.clearForSession(sessionKeyValue);
   }
 
-  async handleRequestResolved(event: AgentServerRequestResolvedEvent): Promise<void> {
+  async handleRequestResolved(event: AgentServerRequestResolvedEvent): Promise<boolean> {
+    const pendingClaim = this.requestClaim(event.sessionKey, event.requestId);
+    if (pendingClaim && ((event.threadId && pendingClaim.request.threadId && event.threadId !== pendingClaim.request.threadId)
+      || (event.turnId && pendingClaim.request.turnId && event.turnId !== pendingClaim.request.turnId))) return false;
     const claim = this.resolveRequestClaim(event);
     const preserveLocalUserInput = claim?.kind === "user_input_request"
       && claim.localUserInputResultSignature !== undefined
@@ -536,6 +552,32 @@ export class CodexPromptFlow {
       }
     }
     for (const requestId of requestIds) await this.mcp.resolve(event.sessionKey, requestId, event.result);
+    return Boolean(claim && isBlockingRequest(claim.request));
+  }
+
+  // Only the native callback is answered. This in-memory projection keeps the
+  // remaining UI gates intact until their own response or resolution arrives.
+  private async respondToRequest(sessionKey: string, requestId: string | number, result: unknown): Promise<void> {
+    if (!this.deps.agent.respond) throw new Error("Agent driver cannot answer Codex prompts.");
+    await this.deps.agent.respond(sessionKey, requestId, result);
+    const claim = this.requestClaim(sessionKey, requestId);
+    if (claim && claim.state !== "resolved") claim.state = "answered";
+  }
+
+  blockingPromptKind(sessionKey: string): PendingPrompt["kind"] | undefined {
+    let kind: PendingPrompt["kind"] | undefined;
+    for (const claim of this.requestClaims.values()) {
+      if (claim.sessionKey !== sessionKey || claim.state === "answered" || claim.state === "resolved"
+        || !isBlockingRequest(claim.request)) continue;
+      if (claim.kind === "approval_request") return "codex_approval";
+      kind = claim.kind === "mcp_elicitation_request" ? "codex_mcp_elicitation" : "codex_user_input";
+    }
+    return kind;
+  }
+
+  blockingPromptPhase(sessionKey: string): "waitingForApproval" | "waitingForInput" | undefined {
+    const kind = this.blockingPromptKind(sessionKey);
+    return kind === "codex_approval" ? "waitingForApproval" : kind ? "waitingForInput" : undefined;
   }
 
   private async retireResolvedPrompt(
@@ -595,8 +637,13 @@ export class CodexPromptFlow {
         original_request_type: existing.kind,
         state: existing.state,
       };
-      if (conflict) this.deps.logger.warn("router.conflicting_duplicate_interactive_request_ignored", fields);
-      else this.deps.logger.info("router.duplicate_interactive_request_suppressed", fields);
+      if (conflict || logicalKey !== computedLogicalKey) {
+        this.deps.logger.warn("router.conflicting_duplicate_interactive_request_ignored", fields);
+        // A conflicting copy must not become an alias: resolving it must never
+        // hide the original callback or reuse its earlier answer.
+        return undefined;
+      }
+      this.deps.logger.info("router.duplicate_interactive_request_suppressed", fields);
       existing.requestIds.set(alias, event.requestId);
       this.requestAliases.set(alias, existing.logicalKey);
       return undefined;
@@ -651,9 +698,16 @@ export class CodexPromptFlow {
   }
 }
 
+function isBlockingRequest(event: InteractiveRequestEvent): boolean {
+  return event.type !== "user_input_request" || event.isBlocking !== false;
+}
+
 function interactiveRequestLogicalKey(event: InteractiveRequestEvent, signature: string): string {
   const method = event.type === "approval_request" ? event.method : event.type;
-  const stableId = "itemId" in event && typeof event.itemId === "string"
+  const stableId = event.type === "approval_request"
+    ? `approval:${event.commandExecutionKind ?? "command"}:${event.approvalId
+      ? `native:${event.approvalId}` : `rpc:${typeof event.requestId}:${event.requestId}`}`
+    : "itemId" in event && typeof event.itemId === "string"
     ? `item:${event.itemId}`
     : "elicitationId" in event && typeof event.elicitationId === "string"
       ? `elicitation:${event.elicitationId}`
@@ -663,9 +717,9 @@ function interactiveRequestLogicalKey(event: InteractiveRequestEvent, signature:
 
 function interactiveRequestSignature(event: InteractiveRequestEvent): string {
   if (event.type === "approval_request") {
-    return canonicalJson({ type: event.type, method: event.method, approvalKind: event.approvalKind, title: event.title, body: event.body, params: event.params });
+    return canonicalJson({ type: event.type, method: event.method, approvalKind: event.approvalKind, approvalId: event.approvalId, commandExecutionKind: event.commandExecutionKind ?? "command", title: event.title, body: event.body, params: event.params });
   }
-  if (event.type === "user_input_request") return canonicalJson({ type: event.type, questions: event.questions });
+  if (event.type === "user_input_request") return canonicalJson({ type: event.type, isBlocking: event.isBlocking !== false, questions: event.questions });
   return canonicalJson({
     type: event.type,
     serverName: event.serverName,
@@ -685,8 +739,8 @@ function canonicalJson(value: unknown): string {
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
 }
 
-function expiredQuestionMessage(): RenderedTelegramText {
-  return messageWithTitle("Question expired.", "Use Interrupt on the latest activity card, then resend your instruction.");
+function expiredQuestionMessage(isBlocking = true): RenderedTelegramText {
+  return messageWithTitle("Question expired.", isBlocking ? "Use Interrupt on the latest activity card, then resend your instruction." : "Codex can continue without this answer.");
 }
 
 function resolvedPromptMessage(

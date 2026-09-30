@@ -13,7 +13,7 @@ export interface ServerRequestContext {
   logger: Logger;
   onOutput: AgentOutputHandler;
   emitActivity(key: string, activity: AgentActivity, params?: Record<string, unknown>): Promise<void>;
-  registerRequest(requestId: string | number, threadId: string, sessionKeys: string[], method: string, turnId: string | undefined, signature: string): boolean;
+  registerRequest(requestId: string | number, threadId: string, sessionKeys: string[], method: string, turnId: string | undefined, signature: string, isBlocking?: boolean, approvalId?: string, commandExecutionKind?: "command" | "writeStdin"): boolean;
   requestIsResolved(requestId: string | number, threadId: string): boolean;
   claimRequestDelivery(requestId: string | number, threadId: string, sessionKey: string): boolean;
   markRequestDelivered(requestId: string | number, threadId: string, sessionKey: string): Promise<void>;
@@ -148,9 +148,13 @@ export async function handleCodexServerRequest(message: JsonRpcRequest, context:
 
   const approvalKind = approvalKindForMethod(message.method);
   if (approvalKind) {
+    if (approvalKind === "command" && params?.kind !== undefined && params.kind !== "command" && params.kind !== "writeStdin") {
+      await context.rpc.rejectRequest(message.id, -32602, "Unsupported command approval kind.");
+      return;
+    }
     const { title, body } = approvalCopy(approvalKind, params);
     const turnId = getTurnId(params);
-    if (!context.registerRequest(message.id, threadId!, keys, message.method, turnId, serverRequestSignature(message))) return;
+    if (!context.registerRequest(message.id, threadId!, keys, message.method, turnId, serverRequestSignature(message), true, getString(params, "approvalId"), approvalIdentity(approvalKind, params).commandExecutionKind)) return;
     for (const sessionKey of keys) {
       const running = context.sessions.get(sessionKey);
       if (running) running.status.waitingForApproval = true;
@@ -166,6 +170,7 @@ export async function handleCodexServerRequest(message: JsonRpcRequest, context:
           threadId: threadId!,
           method: message.method,
           approvalKind,
+          ...approvalIdentity(approvalKind, params),
           title,
           body,
           params: message.params,
@@ -268,8 +273,12 @@ async function handleSideConversationRequest(
 
   const approvalKind = approvalKindForMethod(message.method);
   if (approvalKind) {
+    if (approvalKind === "command" && params?.kind !== undefined && params.kind !== "command" && params.kind !== "writeStdin") {
+      await context.rpc.rejectRequest(message.id, -32602, "Unsupported command approval kind.");
+      return;
+    }
     const { title, body } = approvalCopy(approvalKind, params);
-    if (!context.registerRequest(message.id, threadId, [side.sessionKey], message.method, getTurnId(params), serverRequestSignature(message))) return;
+    if (!context.registerRequest(message.id, threadId, [side.sessionKey], message.method, getTurnId(params), serverRequestSignature(message), true, getString(params, "approvalId"), approvalIdentity(approvalKind, params).commandExecutionKind)) return;
     if (!context.claimRequestDelivery(message.id, threadId, side.sessionKey)) return;
     try {
       await emit({
@@ -279,6 +288,7 @@ async function handleSideConversationRequest(
         threadId,
         method: message.method,
         approvalKind,
+        ...approvalIdentity(approvalKind, params),
         title,
         body,
         params: message.params,
@@ -295,5 +305,28 @@ async function handleSideConversationRequest(
 }
 
 function serverRequestSignature(message: JsonRpcRequest): string {
-  return JSON.stringify({ method: message.method, params: message.params ?? null });
+  const params = asRecord(message.params);
+  return JSON.stringify(canonicalRequestValue({
+    method: message.method,
+    params: message.method === "item/commandExecution/requestApproval" ? { ...params, kind: params?.kind ?? "command" } : message.params ?? null,
+  }));
+}
+
+function approvalIdentity(kind: string, params: Record<string, unknown> | undefined): {
+  approvalId?: string;
+  commandExecutionKind?: "command" | "writeStdin";
+} {
+  return {
+    ...(typeof params?.approvalId === "string" ? { approvalId: params.approvalId } : {}),
+    ...(kind === "command" ? { commandExecutionKind: params?.kind === "writeStdin" ? "writeStdin" as const : "command" as const } : {}),
+  };
+}
+
+function canonicalRequestValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalRequestValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, canonicalRequestValue(entry)]));
+  }
+  return value;
 }

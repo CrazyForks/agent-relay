@@ -42,7 +42,8 @@ export interface RelayAgentEventRouterDeps {
     handleUserInputRequest(event: AgentUserInputRequestEvent): Promise<boolean>;
     handleApprovalRequest(event: AgentApprovalRequestEvent): Promise<boolean>;
     handleMcpElicitationRequest(event: AgentMcpElicitationRequestEvent): Promise<boolean>;
-    handleRequestResolved(event: AgentServerRequestResolvedEvent): Promise<void>;
+    handleRequestResolved(event: AgentServerRequestResolvedEvent): Promise<boolean>;
+    blockingPromptPhase(sessionKey: string): "waitingForApproval" | "waitingForInput" | undefined;
     clearForSession(sessionKey: string): void;
   };
   finalizeOutput(sessionKey: string): Promise<void>;
@@ -97,7 +98,7 @@ export class RelayAgentEventRouter {
       case "turn_progressed":
         if (this.isTerminalTurn(event.sessionKey, event.turnId)) return true;
         if (this.deps.currentThreadId(event.sessionKey) === event.threadId) {
-          await this.deps.activity.setPhase(event.sessionKey, "working");
+          await this.deps.activity.setPhase(event.sessionKey, this.deps.prompts.blockingPromptPhase(event.sessionKey) ?? "working");
         }
         return true;
       case "user_message":
@@ -347,10 +348,10 @@ export class RelayAgentEventRouter {
   }
 
   private async handleRequestResolved(event: AgentServerRequestResolvedEvent): Promise<void> {
-    await this.deps.prompts.handleRequestResolved(event);
+    const wasBlocking = await this.deps.prompts.handleRequestResolved(event);
+    if (!wasBlocking) return;
     if (this.isTerminalTurn(event.sessionKey, event.turnId)) return;
     if (event.threadId && this.deps.currentThreadId(event.sessionKey) !== event.threadId) return;
-    await this.deps.activity.setPhase(event.sessionKey, "working");
     await this.deps.markActiveTask(event.sessionKey, "running", event.turnId);
   }
 
@@ -422,6 +423,7 @@ export class RelayAgentEventRouter {
   ): Promise<void> {
     await this.deps.finalizeOutput(event.sessionKey);
     if (!await render()) return;
+    if (event.type === "user_input_request" && event.isBlocking === false) return;
     await this.deps.activity.setPhase(event.sessionKey, phase);
     await this.deps.markActiveTask(event.sessionKey, "blocked", event.turnId);
   }

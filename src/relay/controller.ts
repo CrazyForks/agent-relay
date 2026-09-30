@@ -36,6 +36,7 @@ import { OutputStreamer } from "./output-streamer.ts";
 import { ActivityStreamer } from "./activity-streamer.ts";
 import { TaskCoordinator, type TaskSubmitPreference } from "./task-coordinator.ts";
 import { MediaRelayService } from "./media-service.ts";
+import { parsePromptPayload } from "./ui/prompt-state.ts";
 import { CodexPromptFlow } from "./codex-prompt-flow.ts";
 import { ThreadCommandService } from "./thread-command-service.ts";
 import { WorkspaceFlow } from "./workspace-flow.ts";
@@ -228,6 +229,7 @@ export class RelayController {
       renderStrictCallbackPage: (message, body, replyMarkup) => this.renderStrictCallbackPage(message, body, replyMarkup),
       expireCallbackPrompt: (message) => this.expireCallbackPrompt(message),
       clearCodexPromptsForSession: (sessionKeyValue) => this.clearCodexPromptsForSession(sessionKeyValue),
+      hasBlockingCodexPrompt: (sessionKeyValue) => Boolean(this.codexPromptFlow.blockingPromptKind(sessionKeyValue)),
       enqueueSideEvent: (scopeKey, task) => {
         void this.conversationQueue.run(scopeKey, task).catch((error) => {
           this.logger.error("router.side_conversation_event_failed", {
@@ -442,8 +444,11 @@ export class RelayController {
           // While Codex is blocked on an explicit question or approval, new
           // direct prompts are held back so they do not bypass the requested gate.
           const codexPending = this.deps.store.latestPendingPrompt(message.conversationId, ["codex_user_input", "codex_approval", "codex_mcp_elicitation"]);
-          if (codexPending) {
-            await this.sendPendingCodexPromptNotice(message.conversationId, codexPending);
+          const workspace = this.currentWorkspace(message.conversationId);
+          const blockingKind = workspace && this.codexPromptFlow.blockingPromptKind(sessionKey(message.conversationId, workspace.name));
+          if (blockingKind || (codexPending && (codexPending.kind !== "codex_user_input"
+            || parsePromptPayload(codexPending.payloadJson)?.isBlocking !== false))) {
+            await this.sendPendingCodexPromptNotice(message.conversationId, blockingKind ? { kind: blockingKind } : codexPending!);
             return;
           }
           await this.submitTask(message.conversationId, text, message.messageId);
@@ -472,7 +477,7 @@ export class RelayController {
     return message.conversationType === "group" && message.mentionedBot !== true;
   }
 
-  private async sendPendingCodexPromptNotice(conversationId: ConversationId, pending: PendingPrompt): Promise<void> {
+  private async sendPendingCodexPromptNotice(conversationId: ConversationId, pending: Pick<PendingPrompt, "kind">): Promise<void> {
     if (pending.kind === "codex_approval") {
       await this.sendRendered(
         conversationId,
@@ -798,8 +803,10 @@ export class RelayController {
 
   private async markActiveTask(sessionKeyValue: string, status: "blocked" | "running", turnId?: string): Promise<void> {
     if (parseSessionKey(sessionKeyValue)?.agentProvider.startsWith("codex-side-")) return;
-    await this.taskCoordinator.markActive(sessionKeyValue, status, turnId);
-    if (status === "running") await this.activityStreamer.setPhase(sessionKeyValue, "working");
+    const waitingPhase = this.codexPromptFlow.blockingPromptPhase(sessionKeyValue);
+    await this.taskCoordinator.markActive(sessionKeyValue, waitingPhase ? "blocked" : status, turnId);
+    if (waitingPhase) await this.activityStreamer.setPhase(sessionKeyValue, waitingPhase);
+    else if (status === "running") await this.activityStreamer.setPhase(sessionKeyValue, "working");
   }
 
   private async completeTaskAndDispatchNext(sessionKeyValue: string, turnId: string | undefined, status: "done" | "interrupted" | "failed" = "done"): Promise<void> {

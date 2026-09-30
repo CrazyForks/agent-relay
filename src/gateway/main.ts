@@ -11,6 +11,7 @@ import { gatewayLogPath, isProcessAlive, readGatewayState, resolveGatewayStatePa
 import { defaultGatewayStatePath } from "./control.ts";
 import { GatewayRelayControl } from "./relay-control.ts";
 import { GatewayObserver } from "./observer.ts";
+import { isValidServerRequestResponse } from "./server-request-response.ts";
 
 interface GatewayRuntimeConfig {
   codexBin: string;
@@ -49,6 +50,7 @@ export interface PendingServerRequest {
   logicalKey: string;
   requestFingerprint: string;
   requestMethod: string;
+  requestParams?: Record<string, unknown>;
   threadId?: string;
   origins: Map<string, {
     clientId: string;
@@ -57,6 +59,7 @@ export interface PendingServerRequest {
   }>;
   resolved: boolean;
   resolvedNotified: boolean;
+  conflicted?: boolean;
   response?: Record<string, unknown>;
   timeoutTimer?: Timer;
   cleanupTimer?: Timer;
@@ -403,20 +406,33 @@ export function shareServerRequest(
   const logicalKey = serverRequestLogicalKey(message);
   const requestFingerprint = canonicalJson({ method: message.method, params: message.params ?? null });
   const exact = [...pendingRequests.values()].find((candidate) => candidate.origins.has(originKey));
+  // OutgoingMessageSender allocates one global RPC ID and broadcasts/replays
+  // that same request to connections (Codex 0.159.2,
+  // app-server/src/outgoing_message.rs). Detect mutated global IDs before the
+  // logical lookup: even approvalId, kind or thread scope may have changed.
+  const sameNativeId = exact ?? [...pendingRequests.values()].find((candidate) => (
+    [...candidate.origins.values()].some((origin) => origin.requestId === message.id)
+  ));
+  if (sameNativeId && (sameNativeId.logicalKey !== logicalKey || sameNativeId.requestFingerprint !== requestFingerprint)) {
+    // Retain the first fingerprint/answer, reject ambiguity natively, and wait
+    // for Codex's resolution. An old card must never approve a mutated ID.
+    if (!sameNativeId.resolved) sameNativeId.conflicted = true;
+    rejectConflictingServerRequest(originBackend, message.id);
+    return { kind: exact ? "duplicate" : "coalesced", deliverToOrigin: false, conflict: true };
+  }
   if (exact) {
-    if (exact.logicalKey === logicalKey) {
-      if (exact.resolved) answerLateServerRequest(exact, originBackend, message.id);
-      return {
-        kind: "duplicate",
-        deliverToOrigin: false,
-        conflict: exact.requestFingerprint !== requestFingerprint,
-      };
-    }
-    if (!exact.resolved) return { kind: "duplicate", deliverToOrigin: false, conflict: true };
-    removePendingRequest(exact.key, pendingRequests, relayedRequestIds);
+    if (exact.conflicted) rejectConflictingServerRequest(originBackend, message.id);
+    else if (exact.resolved) answerLateServerRequest(exact, originBackend, message.id);
+    return { kind: "duplicate", deliverToOrigin: false, conflict: Boolean(exact.conflicted) };
   }
   const existing = [...pendingRequests.values()].find((candidate) => candidate.logicalKey === logicalKey);
   if (existing) {
+    // Never let a changed payload inherit an earlier approval or become an
+    // origin of that decision. Preserve the first valid pending request/answer.
+    if (existing.conflicted || existing.requestFingerprint !== requestFingerprint) {
+      rejectConflictingServerRequest(originBackend, message.id);
+      return { kind: "coalesced", deliverToOrigin: false, conflict: true };
+    }
     existing.origins.set(originKey, { clientId: origin.data.id, backend: originBackend, requestId: message.id });
     if (existing.resolved) answerLateServerRequest(existing, originBackend, message.id);
     const alreadyVisible = existing.participants.has(origin.data.id);
@@ -428,7 +444,7 @@ export function shareServerRequest(
     return {
       kind: "coalesced",
       deliverToOrigin: !alreadyVisible && !existing.resolved,
-      conflict: existing.requestFingerprint !== requestFingerprint,
+      conflict: false,
     };
   }
   const key = originKey;
@@ -437,6 +453,7 @@ export function shareServerRequest(
     logicalKey,
     requestFingerprint,
     requestMethod: message.method,
+    requestParams: asRecord(message.params),
     threadId,
     origins: new Map([[originKey, { clientId: origin.data.id, backend: originBackend, requestId: message.id }]]),
     resolved: false,
@@ -479,6 +496,11 @@ function answerLateServerRequest(pending: PendingServerRequest, backend: WebSock
   backend.send(JSON.stringify(pending.response
     ? { ...pending.response, id: requestId }
     : { id: requestId, error: { code: -32000, message: "Request already resolved." } }));
+}
+
+function rejectConflictingServerRequest(backend: WebSocket, requestId: string | number): void {
+  if (backend.readyState !== WebSocket.OPEN) return;
+  backend.send(JSON.stringify({ id: requestId, error: { code: -32602, message: "Conflicting server request identity or payload." } }));
 }
 
 export function rebindPendingRequestParticipant(
@@ -526,11 +548,18 @@ export function routeServerRequestResponse(
     ? pendingRequests.get(relayedKey)
     : [...pendingRequests.values()].find((candidate) => candidate.origins.has(ownKey));
   if (!pending) return false;
+  // Relayed IDs belong to the client that received them, not to any connection
+  // that happens to know an alias. Native origins may also answer their own ID.
+  if (relayedKey && pending.participants.get(client.id) !== message.id) return true;
+  if (pending.conflicted) return true;
   if (!pending.resolved) {
+    if (!isValidServerRequestResponse(pending.requestMethod, message, pending.requestParams)) return true;
+    const origins = [...pending.origins.values()].filter((origin) => origin.backend.readyState === WebSocket.OPEN);
+    if (origins.length === 0) return true;
     const { id: _id, ...response } = message;
     pending.response = response;
-    for (const origin of pending.origins.values()) {
-      if (origin.backend.readyState === WebSocket.OPEN) origin.backend.send(JSON.stringify({ ...response, id: origin.requestId }));
+    for (const origin of origins) {
+      origin.backend.send(JSON.stringify({ ...response, id: origin.requestId }));
     }
     pending.resolved = true;
     notifyServerRequestResolved(pending, clients);
@@ -540,7 +569,7 @@ export function routeServerRequestResponse(
 }
 
 export function handleServerRequestResolved(
-  client: GatewayClientData,
+  client: Pick<GatewayClientData, "id">,
   message: Record<string, unknown>,
   clients: Map<string, ConnectedClient>,
   pendingRequests: Map<string, PendingServerRequest>,
@@ -553,10 +582,11 @@ export function handleServerRequestResolved(
   const directKey = requestKey(client.id, requestId);
   const direct = [...pendingRequests.values()].find((candidate) => candidate.origins.has(directKey));
   const threadId = typeof params?.threadId === "string" ? params.threadId : undefined;
-  const pending = direct ?? [...pendingRequests.values()].find((candidate) => (
+  const matches = [...pendingRequests.values()].filter((candidate) => (
     [...candidate.origins.values()].some((origin) => origin.requestId === requestId)
       && (!threadId || candidate.threadId === threadId)
   ));
+  const pending = direct ?? (matches.length === 1 ? matches[0] : undefined);
   if (!pending) return false;
   if (!pending.response && params && Object.prototype.hasOwnProperty.call(params, "result")) {
     pending.response = { result: params.result };
@@ -624,16 +654,22 @@ function schedulePendingRequestRemoval(
   pending.cleanupTimer.unref();
 }
 
-function serverRequestLogicalKey(message: Record<string, unknown> & { method: string }): string {
+function serverRequestLogicalKey(message: Record<string, unknown> & { id: string | number; method: string }): string {
   const params = asRecord(message.params);
   const threadId = messageThreadId(message) ?? "";
   const turnId = typeof params?.turnId === "string" ? params.turnId : "";
-  const stableId = typeof params?.itemId === "string"
-    ? `item:${params.itemId}`
-    : typeof params?.elicitationId === "string"
+  const stableId = typeof params?.approvalId === "string" && params.approvalId.length > 0
+    ? `approval:${params.approvalId}`
+    : typeof params?.elicitationId === "string" && params.elicitationId.length > 0
       ? `elicitation:${params.elicitationId}`
-      : `payload:${canonicalJson(params ?? null)}`;
-  return `${threadId}\0${turnId}\0${message.method}\0${stableId}`;
+      // Codex request IDs identify the callback across app-server connections.
+      // An item can issue several identical-looking callbacks, so itemId (or a
+      // payload hash) alone is never a safe legacy approval identity.
+      : `request:${rpcIdKey(message.id)}`;
+  const kind = message.method === "item/commandExecution/requestApproval"
+    ? (params?.kind === undefined ? "command" : params.kind)
+    : null;
+  return canonicalJson([threadId, turnId, message.method, kind, stableId]);
 }
 
 function canonicalJson(value: unknown): string {
@@ -643,10 +679,15 @@ function canonicalJson(value: unknown): string {
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
 }
 
-export function isShareableServerRequest(method: string): boolean {
+export function isShareableServerRequest(method: string, params?: unknown): boolean {
+  // Native verification and richer OpenAI forms have connection-owned/native
+  // UI semantics. Pass them through to their original client unchanged.
+  if (method === "mcpServer/elicitation/request") {
+    const mode = asRecord(params)?.mode;
+    return mode === "form" || mode === "url";
+  }
   return method.includes("requestApproval")
-    || method.includes("requestUserInput")
-    || method === "mcpServer/elicitation/request";
+    || method.includes("requestUserInput");
 }
 
 function isServerRequest(message: Record<string, unknown>): message is Record<string, unknown> & { id: string | number; method: string } {
