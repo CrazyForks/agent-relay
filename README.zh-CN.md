@@ -63,8 +63,8 @@ npx @asuka1127/agent-relay install
 
 向导引导配置机器人凭据、用户/会话白名单、工作区根目录、SQLite 状态文件、Codex 可执行文件、沙箱及审批选项，并可选择启用本地 helper 或实验性 Gateway 开关。工作区根目录应选择代码/项目目录，而非安装目录。请在可信机器上运行，并只允许可信用户访问。
 
-- **Telegram：**通过 [BotFather](https://t.me/BotFather) 创建机器人，填入 token 和本人数字 user ID。完整步骤见 [Telegram 快速上手](docs/en/quickstart-telegram.md)。
-- **飞书/Lark：**在[飞书开发者后台](https://open.feishu.cn/app)或 [Lark 开发者后台](https://open.larksuite.com/app)创建自建应用，启用机器人能力，填入 App ID/Secret 和该应用专属的 `open_id` 白名单。先保存配置并启动 relay，**再保存长连接订阅**。按 [Lark/飞书快速上手](docs/en/quickstart-lark.md)完成权限、消息事件、卡片回调、版本发布和可用范围设置。
+- **Telegram**：通过 [BotFather](https://t.me/BotFather) 创建机器人，填入 token 和本人数字 user ID。完整步骤见 [Telegram 快速上手](docs/en/quickstart-telegram.md)。
+- **飞书/Lark**：在[飞书开发者后台](https://open.feishu.cn/app)或 [Lark 开发者后台](https://open.larksuite.com/app)创建自建应用，启用机器人能力，填入 App ID/Secret 和该应用专属的 `open_id` 白名单。先保存配置并启动 relay，**再保存长连接订阅**。按 [Lark/飞书快速上手](docs/en/quickstart-lark.md)完成权限、消息事件、卡片回调、版本发布和可用范围设置。
 
 Secret 输入会被掩码；只有明确同意后，才会把凭据发送到所选平台的官方 API 做只读检查。Telegram 检查仅调用 `getMe`、`getWebhookInfo`，不会消费 `getUpdates` 或删除已有 webhook。检查不能证明消息链路、平台权限或应用发布已经完成。向导不会自动创建机器人、修改 webhook、配置平台后台、安装 Gateway 代理或启动 relay。
 
